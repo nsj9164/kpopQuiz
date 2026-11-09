@@ -1,0 +1,13 @@
+{
+  "name": "kpop-quiz",
+  "version": "1.0.0",
+  "private": true,
+  "description": "K-POP 아이돌 노래 맞추기 채팅봇 게임 (VS Code 위장판, 멀티플레이)",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
