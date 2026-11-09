@@ -218,6 +218,144 @@
     say(`🏁 <b>게임 종료!</b><br>정답 <b>${S.correct}</b> / ${played} (${rate}%)<br>점수 <b>${S.score}점</b> · 최고 연속 ${S.bestStreak}회<br>등급: ${Q.grade(rate)}${rec}<br><br>다시 하려면 <code>/시작</code>`, 300);
   }
 
+  // ───── 끝말잇기 (봇이랑 1:1) ─────
+  const WC = window.WordChain;
+  let dict = null, dictLoading = null;
+  // 사전(2.9MB)은 처음 끝말잇기 할 때만 불러옴
+  function loadDict() {
+    if (dict) return Promise.resolve(dict);
+    if (!dictLoading) {
+      dictLoading = new Promise((resolve, reject) => {
+        if (window.WORD_DICT) return resolve();
+        const s = document.createElement('script');
+        s.src = 'js/words.js';
+        s.onload = resolve;
+        s.onerror = reject;
+        document.head.appendChild(s);
+      }).then(() => (dict = WC.build(window.WORD_DICT))).catch((e) => { dictLoading = null; throw e; });
+    }
+    return dictLoading;
+  }
+  const W = { running: false, need: '', used: new Set(), words: 0, score: 0, hints: 0, time: 20, remain: 0, timer: null, locked: true, runId: 0 };
+
+  function wcRenderTimer() {
+    if (!W.running || !W.time || W.locked) return setTimerText('');
+    setTimerText(S.paused ? '⏸ paused' : `⏱ ${W.remain}s`, W.remain <= 5 && !S.paused);
+  }
+  function wcStopTimer() { clearInterval(W.timer); W.timer = null; wcRenderTimer(); }
+  function wcStartTimer() {
+    wcStopTimer();
+    if (!W.time) return;
+    W.remain = W.time;
+    wcRenderTimer();
+    W.timer = setInterval(() => {
+      if (S.paused || W.locked) return;
+      W.remain--;
+      wcRenderTimer();
+      if (W.remain === 5 && W.time > 8) say('⏰ <b>5초</b>!', 0);
+      if (W.remain <= 0) { wcStopTimer(); wcFinish('timeout'); }
+    }, 1000);
+  }
+
+  async function wcStart(arg) {
+    if (S.running) return say('노래 퀴즈가 진행 중이에요. <code>/종료</code> 후에 시작해주세요.');
+    if (W.running) return say('이미 끝말잇기 중이에요! 그만하려면 <code>/종료</code>');
+    let t = arg === '' ? store.get('wctime', 20) : parseInt(arg, 10);
+    if (isNaN(t) || t < 0) t = 20;
+    if (t > 0) t = Math.max(5, Math.min(120, t));
+    store.set('wctime', t);
+    const run = ++W.runId;
+    Object.assign(W, { running: true, need: '', used: new Set(), words: 0, score: 0, hints: 0, time: t, locked: true });
+    if (!dict) say('📕 사전 불러오는 중…', 0);
+    try { await loadDict(); } catch (e) {
+      W.running = false;
+      return say('⚠ 사전 파일(js/words.js)을 못 불러왔어요.');
+    }
+    if (W.runId !== run) return;
+    say(WC.rulesHTML(false, t) + `<br><span style="opacity:.7">(사전 단어 ${dict.size.toLocaleString()}개)</span>`);
+    wcBot(WC.startWord(dict, W.used), '제가 먼저 할게요!');
+  }
+  function wcBot(word, lead) {
+    const run = W.runId;
+    W.used.add(word);
+    W.need = WC.lastOf(word);
+    say(`${lead ? lead + '<br>' : ''}${WC.wordHTML(word, dict.kind.get(word))}`, 350).then(() => {
+      if (W.running && W.runId === run) { W.locked = false; wcStartTimer(); }
+    });
+  }
+  function wcPlayer(r) {
+    W.locked = true;
+    wcStopTimer();
+    W.used.add(r.word);
+    W.words++;
+    W.score += r.word.length;
+    const tag = WC.KIND_LABEL[r.kind];
+    if (r.killer) {
+      say(`💥 <b>한방단어!</b>${tag ? ` (${tag})` : ''}<br>${WC.needLabel(WC.lastOf(r.word))}(으)로 시작하는 단어가 사전에 없어요… 제가 졌어요 😵`, 300);
+      return wcFinish('win');
+    }
+    const run = W.runId;
+    // 10턴 넘어가면 봇도 가끔 한방단어로 공격
+    const attack = W.words >= 10 ? Math.min(0.05 + (W.words - 10) * 0.02, 0.3) : 0;
+    setTimeout(() => {
+      if (!W.running || W.runId !== run) return;
+      const next = WC.botPick(dict, WC.lastOf(r.word), W.used, attack);
+      if (!next) {
+        say(`😵 ${WC.needLabel(WC.lastOf(r.word))}(으)로 시작하는 단어가 생각이 안 나요… 제가 졌어요!`, 0);
+        return wcFinish('win');
+      }
+      wcBot(next, tag ? `📕 ${tag}로 사전에 있는 단어네요. 인정!` : '');
+    }, 500);
+  }
+  function wcHint() {
+    if (!W.running || W.locked) return say('지금은 힌트를 볼 수 없어요.');
+    if (W.hints >= 3) return say('힌트는 한 판에 3번까지예요 🙅');
+    const w = WC.hintWord(dict, W.need, W.used);
+    if (!w) return say('음… 저도 생각나는 단어가 없어요 😅');
+    W.hints++;
+    say(`💡 힌트 ${W.hints}/3: <span class="cho-inline">${esc(WC.mask(w))}</span> (${w.length}글자)`, 200);
+  }
+  function wcFinish(why) {
+    const example = why !== 'win' && W.need && dict ? WC.hintWord(dict, W.need, W.used) : null;
+    wcStopTimer();
+    W.running = false;
+    W.locked = true;
+    W.runId++;
+    setTimerText('');
+    const head = {
+      win: '🏆 <b>승리!</b> 봇을 이겼어요!',
+      timeout: '⌛ <b>시간 초과!</b> 제가 이겼어요 😎',
+      giveup: '🏳 포기했어요. 제가 이겼어요 😎',
+      stop: '끝말잇기를 끝냈어요.',
+    }[why];
+    const ex = example ? `<br>이런 단어가 있었어요: <b>${esc(example)}</b>` : '';
+    const best = store.get('wcbest', null);
+    let rec = '';
+    if (W.words > 0 && (!best || W.words > best.words)) {
+      store.set('wcbest', { words: W.words, score: W.score, date: new Date().toLocaleDateString('ko-KR') });
+      rec = '<br>🏆 <b>최고 기록 갱신!</b>';
+    }
+    say(`${head}${ex}<br><br>🔤 내가 이은 단어 <b>${W.words}</b>개 · 점수 <b>${W.score}점</b>${rec}<br>다시 하려면 <code>/끝말잇기</code>`, 400);
+  }
+  function wcRun(cmd) {
+    switch (cmd.toLowerCase()) {
+      case '힌트': case 'hint': case 'h': wcHint(); return true;
+      case '패스': case '스킵': case '포기': case '넘기기': case 'pass': case 'skip': if (!W.locked) { W.locked = true; wcFinish('giveup'); } return true;
+      case '점수': case '순위': case '스코어': case 'score': say(`🔤 지금까지 <b>${W.words}</b>개 · <b>${W.score}점</b> · 힌트 ${W.hints}/3`); return true;
+      case '종료': case '그만': case '끝': case 'stop': case 'end': wcFinish('stop'); return true;
+      case '시작': case 'start': case 'go': say('끝말잇기 중이에요! 노래 퀴즈를 하려면 <code>/종료</code> 후에 <code>/시작</code>'); return true;
+      default: return false;
+    }
+  }
+  function wcInput(t, meEl, cmd) {
+    if (W.locked) return; // 봇 차례
+    const r = WC.check(dict, t, W.need, W.used);
+    if (r.ok) { meEl.classList.add('ok'); return wcPlayer(r); }
+    if (NOSLASH.has(cmd) && wcRun(cmd)) return;
+    meEl.classList.add('wrong');
+    say(WC.reasonText(r, W.need), 150);
+  }
+
   // ───── 명령어 ─────
   function score() {
     if (!S.running) return say('진행 중인 게임이 없어요. <code>/시작</code> 으로 시작!');
@@ -231,6 +369,7 @@
     const key = Q.parseMode(arg);
     if (key === null) return say(`현재 모드: <b>${modeLabel()}</b><br><code>/모드 초성</code> · <code>/모드 가수</code> · <code>/모드 가사</code> · <code>/모드 랜덤</code>`);
     if (!key) return say('모드는 <b>초성 · 가수 · 가사 · 랜덤</b> 중에서 골라주세요.');
+    if (key === '릴레이') return say('🎤 노래 릴레이는 친구랑 돌아가면서 하는 <b>멀티 전용</b> 모드예요.<br><b>start.bat</b> 으로 실행해서 멀티 방에서 해주세요.');
     if (guardRunning('모드')) return;
     S.mode = key;
     store.set('mode', key);
@@ -290,7 +429,9 @@
   }
   function record() {
     const b = store.get('best', null);
-    say(`🏆 최고 기록: ${b ? `<b>${b.score}점</b> (정답 ${b.correct}/${b.played}, ${esc(b.date)})` : '아직 없음'}<br>누적 정답: <b>${store.get('lifetime', 0)}</b>개`);
+    const w = store.get('wcbest', null);
+    say(`🏆 최고 기록: ${b ? `<b>${b.score}점</b> (정답 ${b.correct}/${b.played}, ${esc(b.date)})` : '아직 없음'}<br>누적 정답: <b>${store.get('lifetime', 0)}</b>개` +
+      `<br>🔤 끝말잇기 최고: ${w ? `<b>${w.words}</b>개 이어감 (${w.score}점, ${esc(w.date)})` : '아직 없음'}`);
   }
   function syncButtons() {
     $('#btn-stealth').classList.toggle('on', elChat.classList.contains('stealth'));
@@ -317,9 +458,13 @@
   const NOSLASH = new Set(['시작', '힌트', '패스', '스킵', '포기', '점수', '순위', '종료', '그만', '도움말', '명령어']);
   function run(cmd, arg) {
     if (runLocal(cmd)) return;
+    if (W.running && wcRun(cmd)) return;
     switch (cmd.toLowerCase()) {
       case '도움말': case '명령어': case 'help': case '?': return say(Q.helpHTML(false));
-      case '시작': case 'start': case 'go': return start(arg);
+      case '끝말잇기': case '끝말': case 'wc': case 'wordchain': return wcStart(arg);
+      case '시작': case 'start': case 'go':
+        if (/^끝말/.test(arg)) return wcStart(arg.replace(/^끝말(잇기)?\s*/, ''));
+        return start(arg);
       case '힌트': case 'hint': case 'h': return hint(false);
       case '패스': case '스킵': case '포기': case '넘기기': case 'pass': case 'skip': return pass();
       case '점수': case '순위': case '스코어': case 'score': return score();
@@ -347,6 +492,7 @@
     const cmd = m ? m[1] : '';
     const arg = m ? m[2].trim() : '';
 
+    if (!isSlash && W.running) return wcInput(t, meEl, cmd);
     if (!isSlash && S.running && S.q && !S.locked) {
       const r = Q.checkAnswer(t, S.q, S.qMode, db.aliases);
       if (r.ok) { meEl.classList.add('ok'); return correct(); }
@@ -369,7 +515,6 @@
   function send() {
     const v = elInput.value;
     if (!v.trim()) return;
-    if (key === '릴레이') return say('🎤 노래 릴레이는 친구랑 돌아가면서 하는 <b>멀티 전용</b> 모드예요.<br><b>start.bat</b> 으로 실행해서 멀티 방에서 해주세요.');
     history.push(v);
     if (history.length > 50) history.shift();
     hIdx = -1;
@@ -398,7 +543,7 @@
   $('#btn-clear').addEventListener('click', () => runLocal('청소'));
 
   // 채팅 숨기면 타이머 일시정지 (혼자 하기만)
-  window.addEventListener('chatvisibility', (e) => { S.paused = !e.detail; if (S.running) renderTimer(); });
+  window.addEventListener('chatvisibility', (e) => { S.paused = !e.detail; if (S.running) renderTimer(); if (W.running) wcRenderTimer(); });
 
   // ───── multi.js 에서 쓰는 채팅창 API ─────
   window.Chat = {
@@ -417,6 +562,8 @@
       clearTimeout(S.nextT);
       S.runId++;
       Object.assign(S, { running: false, q: null, locked: true, prep: null });
+      wcStopTimer();
+      Object.assign(W, { running: false, locked: true, runId: W.runId + 1 });
       setTimerText('');
     },
   };

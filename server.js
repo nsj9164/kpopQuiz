@@ -41,6 +41,11 @@ async function fetchJSON(url) {
   }
 }
 const getLyrics = Q.makeLyricsFetcher(fetchJSON, db);
+
+// 끝말잇기 사전 (표준국어대사전 명사)
+const WC = require('./js/wordchain-core.js');
+const wcDict = WC.build(loadWindowScript('js/words.js').WORD_DICT);
+if (!wcDict.size) console.error('[!] 끝말잇기 사전(js/words.js)이 비어 있어요');
 const getDiscography = Q.makeDiscographyFetcher(fetchJSON, db); // 노래 릴레이용 (iTunes)
 
 function readCustomStore() {
@@ -70,8 +75,9 @@ class Room {
     this.name = name;
     this.players = new Map(); // 비밀 id → { id, pub, name, conns, leaveT }
     this.history = [];
-    this.set = { mode: '가사', era: 'all', artist: null, time: 40, turnTime: 20 }; // turnTime: 릴레이 한 사람 차례 시간
+    this.set = { mode: '가사', era: 'all', artist: null, time: 40, turnTime: 20, wcTime: 20 }; // turnTime: 릴레이 한 사람 차례 시간, wcTime: 끝말잇기 한 턴
     this.g = null;
+    this.wc = null; // 끝말잇기
     this.emptyT = null;
   }
 
@@ -112,8 +118,8 @@ class Room {
     p.leaveT = null;
     p.conns.add(res);
     this.send(res, { t: 'hello', you: p.pub, name: p.name, room: this.name, history: this.history });
-    const g = this.g;
-    this.send(res, { t: 'timer', remain: g && !g.locked && g.tl ? g.remain : null });
+    const g = this.g, w = this.wc;
+    this.send(res, { t: 'timer', remain: g && !g.locked && g.tl ? g.remain : w && !w.locked && w.time ? w.remain : null });
     if (!this.history.length) {
       this.bot(`안녕하세요! 🎵 <b>K-POP 노래 맞추기</b> 멀티 방이에요.<br>아이돌 노래 <b>${db.songs.length}곡</b> (${db.minYear}~${db.maxYear}) 중에서 문제가 나와요.<br>제일 먼저 맞힌 사람이 점수를 가져가요!<br><br>▶ <code>/시작</code> 게임 시작 · 📖 <code>/도움말</code> 명령어`);
     }
@@ -153,6 +159,7 @@ class Room {
     const arg = m ? m[2].trim() : '';
     const g = this.g;
 
+    if (!isSlash && this.wc) return this.wcMessage(p, text, cmd, arg);
     // 릴레이: 자기 차례인 사람이 친 채팅만 채점
     if (!isSlash && g && g.r && !g.locked && g.r.turn === p.id && !NOSLASH.has(cmd)) return this.relayAnswer(p, text);
     if (!isSlash && g && g.q && !g.locked) {
@@ -169,9 +176,13 @@ class Room {
   }
 
   run(p, cmd, arg) {
+    if (this.wc && this.wcRun(p, cmd)) return;
     switch (cmd.toLowerCase()) {
       case '도움말': case '명령어': case 'help': case '?': return this.bot(Q.helpHTML(true));
-      case '시작': case 'start': case 'go': return this.start(p, arg);
+      case '끝말잇기': case '끝말': case 'wc': case 'wordchain': return this.wcStart(p, arg);
+      case '시작': case 'start': case 'go':
+        if (/^끝말/.test(arg)) return this.wcStart(p, arg.replace(/^끝말(잇기)?\s*/, ''));
+        return this.start(p, arg);
       case '힌트': case 'hint': case 'h': return this.g && this.g.r ? this.relayHint(p) : this.hint(false);
       case '패스': case '스킵': case '포기': case '넘기기': case 'pass': case 'skip': return this.g && this.g.r ? this.relayPass(p) : this.pass(p);
       case '점수': case '순위': case '스코어': case 'score': return this.scoreboard();
@@ -206,6 +217,7 @@ class Room {
 
   start(p, arg) {
     if (this.g) return this.bot('이미 게임이 진행 중이에요! 그만하려면 <code>/종료</code>');
+    if (this.wc) return this.bot('끝말잇기 중이에요! 노래 퀴즈를 하려면 <code>/종료</code> 후에 <code>/시작</code>');
     if (this.set.mode === '릴레이') return this.relayStart(p, arg);
     let n = arg === '' ? 10 : parseInt(arg, 10);
     if (isNaN(n) || n < 0) n = 10;
@@ -340,10 +352,165 @@ class Room {
     this.g = null;
   }
   stopGame() {
+    if (this.wc) { clearInterval(this.wc.timer); clearTimeout(this.wc.nextT); this.wc = null; }
     if (!this.g) return;
     clearInterval(this.g.timer);
     clearTimeout(this.g.nextT);
     this.g = null;
+  }
+
+  // ───── 끝말잇기 ─────
+  // 제일 먼저 이은 사람이 글자 수만큼 점수. 같은 사람 연속 X (혼자 있을 땐 OK)
+  // 아무도 못 이으면 마지막에 이은 사람 +5, 한방단어도 +5
+  wcStart(p, arg) {
+    if (this.g) return this.bot('노래 퀴즈가 진행 중이에요. <code>/종료</code> 후에 시작해주세요.');
+    if (this.wc) return this.bot('이미 끝말잇기 중이에요! 그만하려면 <code>/종료</code>');
+    if (!wcDict.size) return this.bot('⚠ 끝말잇기 사전(js/words.js)을 못 읽었어요.');
+    let t = arg === '' ? this.set.wcTime : parseInt(arg, 10);
+    if (isNaN(t) || t < 0) t = 20;
+    if (t > 0) t = Math.max(5, Math.min(120, t));
+    this.set.wcTime = t;
+    this.wc = { need: '', used: new Set(), time: t, remain: 0, timer: null, nextT: null, locked: true, last: null, idle: 0, hinted: false, count: 0, scores: new Map() };
+    this.bot(`🎮 <b>${esc(p.name)}</b>님이 끝말잇기를 시작했어요!<br>${WC.rulesHTML(true, t)}`);
+    this.wc.nextT = setTimeout(() => this.wcBot(WC.startWord(wcDict, this.wc.used), '첫 단어는…'), 1200);
+  }
+  // 봇이 단어를 내고 다음 턴 시작
+  wcBot(word, lead) {
+    const w = this.wc;
+    if (!w) return;
+    w.used.add(word);
+    w.need = WC.lastOf(word);
+    w.last = null;
+    w.hinted = false;
+    this.bot(`${lead ? lead + '<br>' : ''}${WC.wordHTML(word, wcDict.kind.get(word), '멜로디봇')}`);
+    this.wcTurn();
+  }
+  wcTurn() {
+    const w = this.wc;
+    w.locked = false;
+    clearInterval(w.timer);
+    if (!w.time) return this.timer(null);
+    w.remain = w.time;
+    this.timer(w.remain);
+    w.timer = setInterval(() => {
+      if (!this.wc || w.locked) return;
+      w.remain--;
+      this.timer(w.remain);
+      if (w.remain === 5 && w.time > 8) this.bot('⏰ <b>5초</b>!');
+      if (w.remain <= 0) this.wcTimeout();
+    }, 1000);
+  }
+  wcPause() {
+    const w = this.wc;
+    w.locked = true;
+    clearInterval(w.timer);
+    w.timer = null;
+    this.timer(null);
+  }
+  wcAdd(p, pts, word) {
+    const s = this.wc.scores.get(p.id) || { name: p.name, score: 0, words: 0 };
+    s.name = p.name;
+    s.score += pts;
+    if (word) s.words++;
+    this.wc.scores.set(p.id, s);
+  }
+  wcMessage(p, text, cmd, arg) {
+    const w = this.wc;
+    const r = w.locked ? null : WC.check(wcDict, text, w.need, w.used);
+    if (r && r.ok) {
+      if (w.last === p.id && this.online().length > 1) {
+        this.chat(p, text, 'wrong');
+        return this.bot(`🙅 ${esc(p.name)}님은 방금 이었어요. 다른 사람 차례!`);
+      }
+      this.chat(p, text, 'ok');
+      return this.wcAccept(p, r);
+    }
+    if (NOSLASH.has(cmd)) { this.chat(p, text, null); return this.run(p, cmd, arg); }
+    if (!r || !r.attempt) return this.chat(p, text, null); // 그냥 채팅
+    this.chat(p, text, 'wrong');
+    this.bot(`${esc(p.name)}님, ${WC.reasonText(r, w.need)}`);
+  }
+  wcAccept(p, r) {
+    const w = this.wc;
+    this.wcPause();
+    w.used.add(r.word);
+    w.count++;
+    w.idle = 0;
+    const pts = r.word.length;
+    const tag = WC.KIND_LABEL[r.kind] ? ` <span class="wc-tag">${WC.KIND_LABEL[r.kind]}</span>` : '';
+    if (r.killer) {
+      this.wcAdd(p, pts + 5, true);
+      this.bot(`💥 <b>한방단어!</b> ${esc(p.name)}님 +${pts + 5}점${tag}<br>${WC.needLabel(WC.lastOf(r.word))}(으)로 시작하는 단어가 사전에 없어요. 새 단어로 갈게요!`);
+      w.nextT = setTimeout(() => this.wcBot(WC.startWord(wcDict, w.used), '새 단어는…'), 2000);
+      return;
+    }
+    this.wcAdd(p, pts, true);
+    w.need = WC.lastOf(r.word);
+    w.last = p.id;
+    w.hinted = false;
+    this.bot(`✅ <b>${esc(p.name)}</b> +${pts}점${tag} · 다음 글자: <b>${WC.needLabel(w.need)}</b>`);
+    this.wcTurn();
+  }
+  wcTimeout() {
+    const w = this.wc;
+    if (!w || w.locked) return;
+    this.wcPause();
+    const lastP = w.last && this.players.get(w.last);
+    let lead;
+    if (lastP) {
+      this.wcAdd(lastP, 5, false);
+      lead = `⌛ 아무도 못 이었어요! 마지막 <b>${esc(lastP.name)}</b>님 +5점`;
+    } else {
+      if (++w.idle >= 2) return this.wcFinish(null, '아무도 안 이어서 끝낼게요 😴');
+      lead = '⌛ 아무도 못 이었네요.';
+    }
+    const next = WC.botPick(wcDict, w.need, w.used, 0);
+    w.nextT = setTimeout(() => next ? this.wcBot(next, `${lead} 제가 이을게요`) : this.wcBot(WC.startWord(wcDict, w.used), `${lead} 새 단어는…`), 800);
+  }
+  wcRun(p, cmd) {
+    const w = this.wc;
+    switch (cmd.toLowerCase()) {
+      case '힌트': case 'hint': case 'h': {
+        if (w.locked) { this.bot('지금은 힌트를 볼 수 없어요.'); return true; }
+        if (w.hinted) { this.bot('이번 글자 힌트는 이미 나왔어요 🙅'); return true; }
+        const h = WC.hintWord(wcDict, w.need, w.used);
+        w.hinted = true;
+        this.bot(h ? `💡 힌트: <span class="cho-inline">${esc(WC.mask(h))}</span> (${h.length}글자)` : '음… 저도 생각나는 단어가 없어요 😅');
+        return true;
+      }
+      case '패스': case '스킵': case '포기': case '넘기기': case 'pass': case 'skip': {
+        if (w.locked) return true;
+        this.wcPause();
+        const next = WC.botPick(wcDict, w.need, w.used, 0);
+        const lead = `⏭ ${esc(p.name)}님이 패스했어요.`;
+        w.nextT = setTimeout(() => next ? this.wcBot(next, `${lead} 제가 이을게요`) : this.wcBot(WC.startWord(wcDict, w.used), `${lead} 새 단어는…`), 500);
+        return true;
+      }
+      case '점수': case '순위': case '스코어': case 'score':
+        this.bot(`📊 끝말잇기 순위 (${w.count}단어째)<br>${this.wcRanking()}`);
+        return true;
+      case '종료': case '그만': case '끝': case 'stop': case 'end':
+        this.wcFinish(p);
+        return true;
+      case '시작': case 'start': case 'go':
+        this.bot('끝말잇기 중이에요! 노래 퀴즈를 하려면 <code>/종료</code> 후에 <code>/시작</code>');
+        return true;
+      default: return false;
+    }
+  }
+  wcRanking() {
+    const list = [...this.wc.scores.values()].sort((a, b) => b.score - a.score || b.words - a.words);
+    if (!list.length) return '아직 아무도 못 이었어요 😅';
+    return list.map((s, i) => `${MEDALS[i] || `${i + 1}.`} <b>${esc(s.name)}</b> ${s.score}점 (${s.words}단어)`).join('<br>');
+  }
+  wcFinish(p, why) {
+    const w = this.wc;
+    clearInterval(w.timer);
+    clearTimeout(w.nextT);
+    this.timer(null);
+    const top = [...w.scores.values()].sort((a, b) => b.score - a.score)[0];
+    this.bot(`🏁 <b>끝말잇기 끝!</b>${p ? ` (${esc(p.name)}님이 끝냈어요)` : ''}${why ? ' ' + why : ''}<br>이어진 단어 ${w.count}개<br><br>${this.wcRanking()}${top ? `<br><br>👑 오늘의 단어왕: <b>${esc(top.name)}</b>` : ''}<br><br>다시 하려면 <code>/끝말잇기</code>`);
+    this.wc = null;
   }
 
   // ───── 노래 릴레이 (가수 보고 노래 쭉 적기, 돌아가면서 한 곡씩) ─────
