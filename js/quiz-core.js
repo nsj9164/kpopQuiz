@@ -56,14 +56,17 @@
   const eraKey = (y) => (y < 2000 ? '90' : y < 2010 ? '00' : y < 2020 ? '10' : '20');
   const ERA_LABEL = { '90': '90년대', '00': '2000년대', '10': '2010년대', '20': '2020년대', all: '전체' };
   const eraLabel = (y) => (y ? ERA_LABEL[eraKey(y)] : '연도 미상');
-  const MODES = ['초성', '가수', '가사', '랜덤'];
-  const MODE_LABEL = { 초성: '초성 퀴즈', 가수: '가수 맞추기', 가사: '가사 퀴즈', 랜덤: '랜덤 (가사+초성+가수)' };
+  const MODES = ['초성', '가수', '가사', '랜덤', '릴레이']; // 릴레이는 멀티 전용
+  const MODE_LABEL = { 초성: '초성 퀴즈', 가수: '가수 맞추기', 가사: '가사 퀴즈', 랜덤: '랜덤 (가사+초성+가수)', 릴레이: '노래 릴레이 (가수 보고 노래 쭉 적기)' };
 
   // null = 값 없음(현재 설정 보여주기), undefined = 잘못된 값
   function parseMode(arg) {
-    const m = String(arg || '').replace(/퀴즈|모드|맞추기/g, '').trim();
+    const m = String(arg || '').replace(/퀴즈|모드|맞추기|\s/g, '');
     if (!m) return null;
-    return MODES.find((x) => x === m) || { chosung: '초성', artist: '가수', lyric: '가사', lyrics: '가사', random: '랜덤', 제목: '초성' }[m.toLowerCase()];
+    return MODES.find((x) => x === m) || {
+      chosung: '초성', artist: '가수', lyric: '가사', lyrics: '가사', random: '랜덤', 제목: '초성',
+      relay: '릴레이', 노래릴레이: '릴레이', 쭉적기: '릴레이', 노래쭉적기: '릴레이', 노래적기: '릴레이',
+    }[m.toLowerCase()];
   }
   function parseEra(arg) {
     const a = String(arg || '').replace(/년대|년|s$/g, '').trim();
@@ -271,6 +274,94 @@
     return s ? { q: s, mode: '초성', fallback: 'notfound' } : null;
   }
 
+  // ───── 노래 릴레이: 가수 노래 목록 (iTunes) ─────
+  const ITUNES = 'https://itunes.apple.com/';
+  // 괄호 안이 이런 표기면 다른 제목이 아니라 버전 표시
+  const VERSION_RE = /\b(feat|ft|with|prod|live|inst|instrumental|mr|remix|mix|ver|version|edit|acoustic|demo|sped|slowed|remaster(ed)?|karaoke|radio|english|japanese|chinese|korean|extended|original|bonus|from|ost|alternate|solo)\b|버전|라이브|리믹스/i;
+
+  // 곡 제목 → { keys: 같은 곡 판단용, extra: 추가로 인정할 표기 }
+  function titleVariants(t) {
+    const keys = new Set(), extra = new Set();
+    const base = String(t).replace(/\s*[(\[（【][^)\]）】]*[)\]）】]/g, '').trim() || String(t); // (feat. …) (Live) [Remix] 빼기
+    const head = base.split(/\s+[-–—]\s+/)[0]; // "전사의 후예 - 폭력시대" → "전사의 후예"
+    [base, head].forEach((s) => { const n = norm(s); if (n) keys.add(n); });
+    for (const m of String(t).matchAll(/[(\[]([^)\]]+)[)\]]/g)) if (!VERSION_RE.test(m[1])) extra.add(norm(m[1])); // "너랑 나 (YOU&I)"
+    if (hasHangul(head) && hasLatin(head)) { // "스물셋 Twenty-Three" → 스물셋 / twentythree
+      extra.add(norm(head.replace(/[^가-힣\s]/g, '')));
+      extra.add(norm(head.replace(/[가-힣]/g, '')));
+    }
+    return { keys: [...keys], extra: [...extra].filter((x) => x.length >= 2 && !keys.has(x)) };
+  }
+
+  // local: songs.js 의 이 가수 곡들 (대표곡), tracks: iTunes 곡 결과 (한국 스토어 먼저)
+  function buildDiscography(local, tracks) {
+    const songs = [], byKey = new Map(), byTrack = new Map();
+    function add(title, keys, extra, core, trackId) {
+      let s = (trackId != null && byTrack.get(trackId)) || keys.map((k) => byKey.get(k)).find(Boolean);
+      if (!s) { s = { title, core: false }; songs.push(s); }
+      if (core && !s.core) { s.core = true; s.title = title; }
+      keys.forEach((k) => { if (!byKey.has(k)) byKey.set(k, s); });
+      extra.forEach((k) => { if (!byKey.has(k)) byKey.set(k, s); });
+      if (trackId != null) byTrack.set(trackId, s);
+    }
+    (local || []).forEach((x) => add(x.title, songAnswers(x), [], true));
+    (tracks || []).forEach((t) => {
+      if (/\s\/\s/.test(t.trackName)) return; // 메들리 ("투지 / 전사의 후예 / …")
+      const v = titleVariants(t.trackName);
+      if (v.keys.length) add(String(t.trackName).replace(/\s*[(\[][^)\]]*[)\]]/g, '').trim() || t.trackName, v.keys, v.extra, false, t.trackId);
+    });
+    return { songs, byKey };
+  }
+
+  // 릴레이 채점 → { song } 맞음 / { song: null, close } 틀림
+  function relayCheck(text, disco) {
+    const n = norm(text);
+    if (!n) return { song: null, close: false };
+    const v = titleVariants(text); // "캔디 (Candy)" 처럼 괄호 붙여 써도 인정
+    const s = [n, ...v.keys, ...v.extra].map((k) => disco.byKey.get(k)).find(Boolean);
+    if (s) return { song: s, close: false };
+    let close = false;
+    if (n.length >= 3) for (const a of disco.byKey.keys()) if (a.length >= 3 && lev(n, a) <= (a.length >= 7 ? 2 : 1)) { close = true; break; }
+    return { song: null, close };
+  }
+
+  // getDiscography(artist) → { artist, songs, byKey, api(iTunes 성공 여부) }. 실패해도 내장 목록으로 돌려줌
+  function makeDiscographyFetcher(fetchJSON, db) {
+    const cache = new Map();
+    async function findArtistId(artist) {
+      const names = [...artistAnswers(artist, db.aliases), norm((db.en || {})[artist])].filter(Boolean);
+      for (const term of [...new Set([(db.en || {})[artist], artist].filter(Boolean))]) {
+        const r = await fetchJSON(`${ITUNES}search?entity=musicArtist&limit=10&term=${encodeURIComponent(term)}`);
+        const hit = ((r && r.results) || []).find((x) => names.includes(norm(x.artistName)));
+        if (hit) return hit.artistId;
+      }
+      return null;
+    }
+    return async function getDiscography(artist) {
+      if (cache.has(artist)) return cache.get(artist);
+      const local = db.byArtist.get(artist) || [];
+      let tracks = [], ok = false;
+      try {
+        const id = await findArtistId(artist);
+        if (id) {
+          const urls = [
+            `${ITUNES}lookup?entity=song&limit=200&country=kr&id=${id}`, // 한글 제목
+            `${ITUNES}lookup?entity=song&limit=200&country=us&id=${id}`, // 영어 제목
+            `${ITUNES}search?entity=song&attribute=artistTerm&limit=200&term=${encodeURIComponent((db.en || {})[artist] || artist)}`,
+          ];
+          const res = await Promise.all(urls.map((u) => fetchJSON(u).catch(() => null)));
+          res.forEach((r) => ((r && r.results) || []).forEach((t) => {
+            if (t.wrapperType === 'track' && t.artistId === id && t.trackName) tracks.push(t);
+          }));
+          ok = tracks.length > 0;
+        }
+      } catch (e) { ok = false; }
+      const d = Object.assign(buildDiscography(local, tracks), { artist, api: ok });
+      if (ok) { cache.set(artist, d); if (cache.size > 200) cache.delete(cache.keys().next().value); }
+      return d;
+    };
+  }
+
   // ───── 안내 문구 ─────
   function helpHTML(multi) {
     const rows = [
@@ -279,7 +370,7 @@
       ['/패스', '이번 문제 넘기기'],
       [multi ? '/순위' : '/점수', multi ? '현재 순위 보기' : '현재 점수 보기'],
       ['/종료', '게임 끝내기'],
-      ['/모드 이름', '초성 · 가수 · 가사 · 랜덤'],
+      ['/모드 이름', multi ? '초성 · 가수 · 가사 · 랜덤 · 릴레이' : '초성 · 가수 · 가사 · 랜덤'],
       ['/연대 값', '90 · 00 · 10 · 20 · 전체'],
       ['/가수 이름', '특정 가수만 (비우면 해제)'],
       ['/시간 초', '제한시간 (0 = 무제한)'],
@@ -290,7 +381,7 @@
     else rows.push(['/기록 · /통계', '최고 기록 · 수록곡 통계']);
     rows.push(['/위장 · /테마', '로그처럼 보이기 · 말풍선 테마'], ['/청소', '대화 지우기 (내 화면만)']);
     const tail = multi
-      ? '<br>정답은 그냥 채팅으로! 제일 먼저 맞힌 사람이 점수를 가져가요.<br>시작·힌트·패스·순위·종료는 <code>/</code> 없이 쳐도 돼요.<br>🙈 <kbd>Esc</kbd> 채팅 숨기기 (멀티에서는 타이머가 계속 가요)'
+      ? '<br>정답은 그냥 채팅으로! 제일 먼저 맞힌 사람이 점수를 가져가요.<br>🎤 <b>릴레이</b>: 가수가 나오면 돌아가면서 그 가수 노래를 하나씩 적어요. 3번 틀리거나 시간이 지나면 탈락!<br>시작·힌트·패스·순위·종료는 <code>/</code> 없이 쳐도 돼요.<br>🙈 <kbd>Esc</kbd> 채팅 숨기기 (멀티에서는 타이머가 계속 가요)'
       : '<br>정답은 그냥 채팅으로 치면 돼요 (띄어쓰기·대소문자 무시, 영어/한글 둘 다 OK).<br>시작·힌트·패스·점수·종료는 <code>/</code> 없이 쳐도 돼요.<br>🙈 <kbd>Esc</kbd> 채팅 숨기기 (숨기면 타이머 일시정지)';
     return `📖 <b>명령어</b><div class="help">${rows.map(([a, b]) => `<code>${esc(a)}</code><span>${esc(b)}</span>`).join('')}</div>${tail}`;
   }
@@ -307,5 +398,6 @@
     buildDB, filterPool, artistAnswers, findArtist, songAnswers, normalizeCustom, parseCustomArg,
     titleKind, checkAnswer, questionHTML, hintText, card, points, grade, helpHTML, statsHTML,
     lyricLines, maskTitle, pickSnippet, chooseLyrics, makeLyricsFetcher, prepareQuestion,
+    titleVariants, buildDiscography, relayCheck, makeDiscographyFetcher,
   };
 });

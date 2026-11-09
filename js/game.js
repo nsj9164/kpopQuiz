@@ -29,7 +29,7 @@
   // ───── 상태 ─────
   const S = {
     running: false,
-    mode: Q.MODES.includes(store.get('mode', '가사')) ? store.get('mode', '가사') : '가사',
+    mode: Q.MODES.includes(store.get('mode', '가사')) && store.get('mode', '가사') !== '릴레이' ? store.get('mode', '가사') : '가사',
     era: ERA_LABEL[store.get('era', 'all')] ? store.get('era', 'all') : 'all',
     artist: db.byArtist.has(store.get('artist', null)) ? store.get('artist', null) : null,
     timeLimit: store.get('time', 40),
@@ -369,6 +369,7 @@
   function send() {
     const v = elInput.value;
     if (!v.trim()) return;
+    if (key === '릴레이') return say('🎤 노래 릴레이는 친구랑 돌아가면서 하는 <b>멀티 전용</b> 모드예요.<br><b>start.bat</b> 으로 실행해서 멀티 방에서 해주세요.');
     history.push(v);
     if (history.length > 50) history.shift();
     hIdx = -1;

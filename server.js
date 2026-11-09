@@ -41,6 +41,7 @@ async function fetchJSON(url) {
   }
 }
 const getLyrics = Q.makeLyricsFetcher(fetchJSON, db);
+const getDiscography = Q.makeDiscographyFetcher(fetchJSON, db); // 노래 릴레이용 (iTunes)
 
 function readCustomStore() {
   try { const v = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); return Array.isArray(v) ? v : []; } catch (e) { return []; }
@@ -69,7 +70,7 @@ class Room {
     this.name = name;
     this.players = new Map(); // 비밀 id → { id, pub, name, conns, leaveT }
     this.history = [];
-    this.set = { mode: '가사', era: 'all', artist: null, time: 40 };
+    this.set = { mode: '가사', era: 'all', artist: null, time: 40, turnTime: 20 }; // turnTime: 릴레이 한 사람 차례 시간
     this.g = null;
     this.emptyT = null;
   }
@@ -112,11 +113,11 @@ class Room {
     p.conns.add(res);
     this.send(res, { t: 'hello', you: p.pub, name: p.name, room: this.name, history: this.history });
     const g = this.g;
-    this.send(res, { t: 'timer', remain: g && g.q && !g.locked && g.tl ? g.remain : null });
+    this.send(res, { t: 'timer', remain: g && !g.locked && g.tl ? g.remain : null });
     if (!this.history.length) {
       this.bot(`안녕하세요! 🎵 <b>K-POP 노래 맞추기</b> 멀티 방이에요.<br>아이돌 노래 <b>${db.songs.length}곡</b> (${db.minYear}~${db.maxYear}) 중에서 문제가 나와요.<br>제일 먼저 맞힌 사람이 점수를 가져가요!<br><br>▶ <code>/시작</code> 게임 시작 · 📖 <code>/도움말</code> 명령어`);
     }
-    if (announce) this.sys(`👋 ${esc(p.name)}님이 들어왔어요`);
+    if (announce) this.sys(`👋 ${esc(p.name)}님이 들어왔어요${g && g.mode === '릴레이' ? ' (다음 라운드부터 순서에 들어가요)' : ''}`);
     this.pushPlayers();
   }
   leave(id, res) {
@@ -130,7 +131,9 @@ class Room {
       this.players.delete(id);
       this.sys(`${esc(p.name)}님이 나갔어요`);
       this.pushPlayers();
-      if (!this.players.size) this.onEmpty();
+      if (!this.players.size) return this.onEmpty();
+      const g = this.g;
+      if (g && g.r && !g.locked && g.r.turn === id) this.relayOut('🚪 나갔어요');
     }, 6000);
   }
   onEmpty() {
@@ -150,6 +153,8 @@ class Room {
     const arg = m ? m[2].trim() : '';
     const g = this.g;
 
+    // 릴레이: 자기 차례인 사람이 친 채팅만 채점
+    if (!isSlash && g && g.r && !g.locked && g.r.turn === p.id && !NOSLASH.has(cmd)) return this.relayAnswer(p, text);
     if (!isSlash && g && g.q && !g.locked) {
       const r = Q.checkAnswer(text, g.q, g.qMode, db.aliases);
       if (r.ok) { this.chat(p, text, 'ok'); return this.correct(p); }
@@ -167,8 +172,8 @@ class Room {
     switch (cmd.toLowerCase()) {
       case '도움말': case '명령어': case 'help': case '?': return this.bot(Q.helpHTML(true));
       case '시작': case 'start': case 'go': return this.start(p, arg);
-      case '힌트': case 'hint': case 'h': return this.hint(false);
-      case '패스': case '스킵': case '포기': case '넘기기': case 'pass': case 'skip': return this.pass(p);
+      case '힌트': case 'hint': case 'h': return this.g && this.g.r ? this.relayHint(p) : this.hint(false);
+      case '패스': case '스킵': case '포기': case '넘기기': case 'pass': case 'skip': return this.g && this.g.r ? this.relayPass(p) : this.pass(p);
       case '점수': case '순위': case '스코어': case 'score': return this.scoreboard();
       case '종료': case '그만': case '끝': case 'stop': case 'end':
         return this.g ? this.finish(true, p) : this.bot('진행 중인 게임이 없어요.');
@@ -201,6 +206,7 @@ class Room {
 
   start(p, arg) {
     if (this.g) return this.bot('이미 게임이 진행 중이에요! 그만하려면 <code>/종료</code>');
+    if (this.set.mode === '릴레이') return this.relayStart(p, arg);
     let n = arg === '' ? 10 : parseInt(arg, 10);
     if (isNaN(n) || n < 0) n = 10;
     n = Math.min(n, 999);
@@ -216,6 +222,7 @@ class Room {
   async next() {
     const g = this.g;
     if (!g) return;
+    if (g.mode === '릴레이') return this.relayRound();
     g.nextT = null;
     if (g.limit && g.qNo >= g.limit) return this.finish(false);
     const p = g.prep || this.prepare(g);
@@ -320,7 +327,8 @@ class Room {
   }
   scoreboard() {
     if (!this.g) return this.bot('진행 중인 게임이 없어요. <code>/시작</code> 으로 시작!');
-    this.bot(`📊 현재 순위 (문제 ${this.g.qNo}${this.g.limit ? ' / ' + this.g.limit : ''})<br>${this.ranking()}`);
+    const unit = this.g.mode === '릴레이' ? '라운드' : '문제';
+    this.bot(`📊 현재 순위 (${unit} ${this.g.qNo}${this.g.limit ? ' / ' + this.g.limit : ''})<br>${this.ranking()}`);
   }
   finish(manual, p) {
     const g = this.g;
@@ -328,7 +336,7 @@ class Room {
     clearTimeout(g.nextT);
     if (manual && g.q && !g.locked) this.bot(`${p ? esc(p.name) + '님이 게임을 끝냈어요. ' : ''}이번 문제 정답은…${Q.card(g.q)}`);
     const top = [...g.scores.values()].sort((a, b) => b.score - a.score)[0];
-    this.bot(`🏁 <b>게임 종료!</b> (총 ${g.qNo}문제)<br><br>${this.ranking()}${top ? `<br><br>👑 오늘의 케이팝 왕: <b>${esc(top.name)}</b>` : ''}<br><br>다시 하려면 <code>/시작</code>`);
+    this.bot(`🏁 <b>게임 종료!</b> (총 ${g.qNo}${g.mode === '릴레이' ? '라운드' : '문제'})<br><br>${this.ranking()}${top ? `<br><br>👑 오늘의 케이팝 왕: <b>${esc(top.name)}</b>` : ''}<br><br>다시 하려면 <code>/시작</code>`);
     this.g = null;
   }
   stopGame() {
@@ -338,6 +346,177 @@ class Room {
     this.g = null;
   }
 
+  // ───── 노래 릴레이 (가수 보고 노래 쭉 적기, 돌아가면서 한 곡씩) ─────
+  // g.r = { d: 노래 목록, order: 순서(id), names, alive: 안 탈락한 사람, used: 나온 곡, turn: 지금 차례, strikes, hinted }
+  relayArtists() {
+    const cnt = new Map();
+    Q.filterPool(db, this.set).forEach((s) => cnt.set(s.artist, (cnt.get(s.artist) || 0) + 1));
+    const all = [...cnt.keys()];
+    // 뒤에서부터 뽑으니까 수록곡 많은(유명한) 가수를 뒤에
+    return [...shuffle(all.filter((a) => cnt.get(a) < 3)), ...shuffle(all.filter((a) => cnt.get(a) >= 3))];
+  }
+  relayPrepare(g) {
+    if (!g.deck.length) g.deck = this.relayArtists();
+    const artist = g.deck.pop();
+    return artist ? getDiscography(artist) : Promise.resolve(null);
+  }
+  relayStart(p, arg) {
+    let n = arg === '' ? 3 : parseInt(arg, 10);
+    if (isNaN(n) || n < 0) n = 3;
+    n = Math.min(n, 99);
+    const deck = this.relayArtists();
+    if (!deck.length) return this.bot('조건에 맞는 가수가 없어요. <code>/연대 전체</code> 또는 <code>/가수</code> 로 필터를 풀어보세요.');
+    const g = this.g = { mode: '릴레이', limit: n, deck, qNo: 0, r: null, locked: true, remain: 0, tl: 0, timer: null, nextT: null, scores: new Map(), prep: null, warnedOffline: false };
+    g.prep = this.relayPrepare(g); // 첫 가수 노래 목록 미리 불러오기
+    const tt = this.set.turnTime;
+    this.bot(`🎮 <b>${esc(p.name)}</b>님이 게임을 시작했어요!<br>모드: <b>${MODE_LABEL['릴레이']}</b> · <b>${n ? n + '라운드' : '무한'}</b> · 한 사람 차례 <b>${tt ? tt + '초' : '무제한'}</b>` +
+      `<br><br>📢 규칙<br>· 가수 이름이 나오면 <b>순서대로</b> 그 가수 노래를 하나씩 적어요<br>· 대표곡 10점 · 수록곡 5점 · 이미 나온 노래는 안 돼요` +
+      `<br>· 3번 틀리거나 시간이 지나면 <b>탈락</b> (<code>/패스</code> = 포기)<br>· 마지막까지 살아남으면 +10점 · <code>/힌트</code> 는 자기 차례에 1번 (맞히면 3점)`);
+    g.nextT = setTimeout(() => this.relayRound(), 2500);
+  }
+
+  async relayRound() {
+    const g = this.g;
+    if (!g) return;
+    g.nextT = null;
+    if (g.limit && g.qNo >= g.limit) return this.finish(false);
+    let order = this.online().map((x) => x.id);
+    if (!order.length) return this.finish(false);
+    const prep = g.prep || this.relayPrepare(g);
+    g.prep = null;
+    const slow = setTimeout(() => { if (this.g === g) this.bot('🔎 노래 목록 불러오는 중…'); }, 1200);
+    let d = null;
+    try { d = await prep; } catch (e) { d = null; }
+    clearTimeout(slow);
+    if (this.g !== g) return; // 기다리는 사이 게임이 끝남
+    if (!d || !d.songs.length) return this.finish(false);
+    if (!d.api && !g.warnedOffline) {
+      g.warnedOffline = true;
+      this.bot('⚠ iTunes에서 노래 목록을 못 받아왔어요. 이번 라운드는 내장 목록에 있는 곡만 정답으로 인정돼요.');
+    }
+    order = this.online().map((x) => x.id).filter((id) => order.includes(id)); // 기다리는 사이 나간 사람 빼기
+    if (!order.length) return this.finish(false);
+    const k = g.qNo % order.length; // 라운드마다 첫 순서 바꾸기
+    order = [...order.slice(k), ...order.slice(0, k)];
+    g.qNo++;
+    g.r = { d, order, names: new Map(order.map((id) => [id, this.players.get(id).name])), alive: new Set(order), used: new Set(), turn: null, strikes: 0, hinted: false };
+    const names = order.map((id) => esc(g.r.names.get(id))).join(' → ');
+    this.bot(`<div class="q-head">🎤 라운드 ${g.qNo}${g.limit ? ' / ' + g.limit : ''} · 노래 릴레이</div><div class="q-title">${esc(d.artist)}</div><div class="q-meta">이 가수 노래를 돌아가면서 하나씩! · 순서: ${names}</div>`);
+    g.locked = false;
+    this.relayTurn(order[0], '');
+    if (!g.limit || g.qNo < g.limit) g.prep = this.relayPrepare(g); // 다음 가수 미리 준비
+  }
+
+  relayTurn(id, prefix) {
+    const g = this.g, r = g.r;
+    r.turn = id;
+    r.strikes = 0;
+    r.hinted = false;
+    g.tl = this.set.turnTime;
+    this.bot(`${prefix}👉 <b>${esc(r.names.get(id))}</b>님 차례!${g.tl ? ` (${g.tl}초)` : ''}`);
+    clearInterval(g.timer);
+    g.timer = null;
+    if (!g.tl) return this.timer(null);
+    g.remain = g.tl;
+    this.timer(g.remain);
+    g.timer = setInterval(() => this.relayTick(), 1000);
+  }
+  relayTick() {
+    const g = this.g;
+    if (!g || !g.r || g.locked) return;
+    g.remain--;
+    this.timer(g.remain);
+    if (g.remain <= 0) this.relayOut('⌛ 시간 초과!');
+  }
+  scoreOf(id, name) {
+    const s = this.g.scores.get(id) || { name, score: 0, correct: 0 };
+    s.name = (this.players.get(id) || {}).name || s.name;
+    this.g.scores.set(id, s);
+    return s;
+  }
+
+  relayAnswer(p, text) {
+    const g = this.g, r = g.r;
+    const res = Q.relayCheck(text, r.d);
+    if (res.song && !r.used.has(res.song)) {
+      this.chat(p, text, 'ok');
+      r.used.add(res.song);
+      const pts = r.hinted ? 3 : res.song.core ? 10 : 5;
+      const s = this.scoreOf(p.id, p.name);
+      s.score += pts;
+      s.correct++;
+      return this.relayNext(`✅ <b>${esc(res.song.title)}</b> +${pts}점${res.song.core ? '' : ' (수록곡)'}<br>`);
+    }
+    this.chat(p, text, 'wrong');
+    if (res.song) return this.bot(`🔁 <b>${esc(res.song.title)}</b>은(는) 이미 나왔어요! 다른 노래로`);
+    if (res.close) return this.bot('🤏 비슷한 제목의 곡이 있어요! 다시 써보세요');
+    r.strikes++;
+    if (r.strikes >= 3) return this.relayOut('❌ 3번 틀렸어요!');
+    this.bot(`❌ ${esc(r.d.artist)} 노래 목록에 없어요 (${r.strikes}/3)`);
+  }
+  relayHint(p) {
+    const g = this.g, r = g.r;
+    if (!r || g.locked) return this.bot('지금은 진행 중인 차례가 없어요.');
+    if (r.turn !== p.id) return this.bot(`힌트는 자기 차례에만 쓸 수 있어요. 지금은 <b>${esc(r.names.get(r.turn))}</b>님 차례!`);
+    if (r.hinted) return this.bot('이번 차례 힌트는 이미 썼어요 🙅');
+    const left = r.d.songs.filter((s) => !r.used.has(s));
+    const pool = left.filter((s) => s.core).length ? left.filter((s) => s.core) : left;
+    if (!pool.length) return this.bot('남은 노래가 없어요!');
+    r.hinted = true;
+    this.bot(`💡 힌트: <span class="cho-inline">${esc(Q.artistMask(Q.pick(pool).title, true))}</span> (맞히면 3점)`);
+  }
+  relayPass(p) {
+    const g = this.g, r = g.r;
+    if (!r || g.locked) return this.bot('지금은 진행 중인 차례가 없어요.');
+    if (r.turn !== p.id) return this.bot(`패스는 자기 차례에만 할 수 있어요. 지금은 <b>${esc(r.names.get(r.turn))}</b>님 차례!`);
+    this.relayOut('🏳 포기!');
+  }
+  // 지금 차례인 사람 탈락
+  relayOut(why) {
+    const g = this.g, r = g.r;
+    r.alive.delete(r.turn);
+    this.relayNext(`${why} 💥 <b>${esc(r.names.get(r.turn))}</b>님 탈락<br>`);
+  }
+  // 다음 차례로 넘기기 (남은 사람이 없으면 라운드 끝)
+  relayNext(prefix) {
+    const g = this.g, r = g.r;
+    for (const id of r.alive) if (!this.players.has(id)) r.alive.delete(id); // 방을 나간 사람
+    const left = r.order.filter((id) => r.alive.has(id));
+    if (!left.length || (r.order.length >= 2 && left.length === 1) || r.used.size >= r.d.songs.length) return this.relayEnd(prefix, left);
+    const i = r.order.indexOf(r.turn);
+    let next = null;
+    for (let k = 1; k <= r.order.length && !next; k++) {
+      const id = r.order[(i + k) % r.order.length];
+      if (r.alive.has(id)) next = id;
+    }
+    this.relayTurn(next, prefix);
+  }
+  relayEnd(prefix, left) {
+    const g = this.g, r = g.r;
+    g.locked = true;
+    this.stopTimer();
+    left.forEach((id) => { this.scoreOf(id, r.names.get(id)).score += 10; });
+    const used = [...r.used].map((s) => esc(s.title));
+    const missed = r.d.songs.filter((s) => s.core && !r.used.has(s)).slice(0, 6).map((s) => esc(s.title));
+    let html = `${prefix}<br>🏁 <b>라운드 ${g.qNo} 끝!</b> (${esc(r.d.artist)})`;
+    if (left.length) html += `<br>🏆 끝까지 살아남은 사람: <b>${left.map((id) => esc(r.names.get(id))).join(', ')}</b> +10점`;
+    html += `<br>나온 노래 ${used.length}곡${used.length ? ': ' + used.join(' · ') : ''}`;
+    if (missed.length) html += `<br>안 나온 대표곡: ${missed.join(' · ')}`;
+    html += `<br><span style="opacity:.7">정답으로 인정되는 곡 ${r.d.songs.length}곡${r.d.api ? ' (iTunes 기준)' : ' (내장 목록)'}</span>`;
+    this.bot(html);
+    g.r = null;
+    clearTimeout(g.nextT);
+    g.nextT = setTimeout(() => this.relayRound(), 4000);
+  }
+  setTurnTime(arg) {
+    if (arg === '') return this.bot(`릴레이 한 사람 차례 시간: <b>${this.set.turnTime ? this.set.turnTime + '초' : '무제한'}</b> · 예) <code>/시간 15</code>, <code>/시간 0</code>`);
+    let t = parseInt(arg, 10);
+    if (isNaN(t) || t < 0) return this.bot('숫자로 입력해주세요. 예) <code>/시간 15</code>');
+    if (t > 0) t = Math.max(5, Math.min(120, t));
+    this.set.turnTime = t;
+    this.bot(`✅ 릴레이 한 사람 차례: <b>${t ? t + '초' : '무제한'}</b>${this.g ? ' (다음 차례부터 적용)' : ''}`);
+  }
+
   // ───── 설정 ─────
   guard(what) {
     if (this.g) { this.bot(`게임 중에는 ${what} 변경이 안 돼요. <code>/종료</code> 후에 바꿔주세요.`); return true; }
@@ -345,11 +524,13 @@ class Room {
   }
   setMode(arg) {
     const key = Q.parseMode(arg);
-    if (key === null) return this.bot(`현재 모드: <b>${MODE_LABEL[this.set.mode]}</b><br><code>/모드 초성</code> · <code>/모드 가수</code> · <code>/모드 가사</code> · <code>/모드 랜덤</code>`);
-    if (!key) return this.bot('모드는 <b>초성 · 가수 · 가사 · 랜덤</b> 중에서 골라주세요.');
+    if (key === null) return this.bot(`현재 모드: <b>${MODE_LABEL[this.set.mode]}</b><br><code>/모드 초성</code> · <code>/모드 가수</code> · <code>/모드 가사</code> · <code>/모드 랜덤</code> · <code>/모드 릴레이</code>`);
+    if (!key) return this.bot('모드는 <b>초성 · 가수 · 가사 · 랜덤 · 릴레이</b> 중에서 골라주세요.');
     if (this.guard('모드')) return;
     this.set.mode = key;
-    const extra = key === '가사' ? '<br>가사는 LRCLIB에서 불러와요' : '';
+    const extra = key === '가사' ? '<br>가사는 LRCLIB에서 불러와요'
+      : key === '릴레이' ? `<br>가수 이름이 나오면 돌아가면서 그 가수 노래를 하나씩 적어요.<br>한 사람 차례: <b>${this.set.turnTime ? this.set.turnTime + '초' : '무제한'}</b> (<code>/시간</code> 으로 변경) · <code>/시작 3</code> = 3라운드`
+      : '';
     this.bot(`✅ 모드 변경: <b>${MODE_LABEL[key]}</b>${extra}`);
   }
   setEra(arg) {
@@ -370,6 +551,7 @@ class Room {
     this.bot(`✅ 가수: <b>${esc(hit[0])}</b> (${Q.filterPool(db, this.set).length}곡)`);
   }
   setTime(arg) {
+    if (this.set.mode === '릴레이') return this.setTurnTime(arg);
     if (arg === '') return this.bot(`현재 제한시간: <b>${this.set.time ? this.set.time + '초' : '무제한'}</b> · 예) <code>/시간 30</code>, <code>/시간 0</code>`);
     let t = parseInt(arg, 10);
     if (isNaN(t) || t < 0) return this.bot('숫자로 입력해주세요. 예) <code>/시간 30</code>');
