@@ -173,6 +173,8 @@ svg { display: block; }
 .q-lyric { font-size: 14px; color: #fff; white-space: pre-wrap; border-left: 3px solid var(--accent); padding-left: 8px; margin: 6px 0; }
 .q-meta { font-size: 12px; color: var(--dim); }
 .cho-inline { font-family: var(--mono); letter-spacing: 2px; font-weight: 700; color: #fff; }
+.q-lyric-inline { color: #fff; font-style: italic; }
+#chat.kakao .q-lyric-inline { color: #111; }
 .card { margin-top: 6px; padding: 7px 10px; border-radius: 8px; background: rgba(255,255,255,.05); border: 1px solid rgba(255,255,255,.08); }
 .card .ct { font-weight: 700; color: #fff; font-size: 14px; }
 .card .ca { font-size: 12px; color: var(--dim); }

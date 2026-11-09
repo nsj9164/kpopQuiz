@@ -13,19 +13,30 @@
     set(k, v) { try { localStorage.setItem('kq.' + k, JSON.stringify(v)); } catch (e) { /* ignore */ } },
   };
 
-  const db = Q.buildDB(window.SONGS, window.ARTIST_ALIASES);
+  const db = Q.buildDB(window.SONGS, window.ARTIST_ALIASES, window.ARTIST_EN);
   const customList = () => Q.normalizeCustom([...(Array.isArray(window.CUSTOM_QUESTIONS) ? window.CUSTOM_QUESTIONS : []), ...store.get('custom', [])]);
+
+  // LRCLIB 에서 가사 불러오기 (7초 넘으면 포기)
+  function fetchJSON(url) {
+    const ctrl = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const t = ctrl && setTimeout(() => ctrl.abort(), 7000);
+    return fetch(url, ctrl ? { signal: ctrl.signal } : undefined)
+      .then((r) => { if (!r.ok) throw new Error('HTTP ' + r.status); return r.json(); })
+      .finally(() => clearTimeout(t));
+  }
+  const getLyrics = Q.makeLyricsFetcher(fetchJSON, db);
 
   // ───── 상태 ─────
   const S = {
     running: false,
-    mode: Q.MODES.includes(store.get('mode', '초성')) ? store.get('mode', '초성') : '초성',
+    mode: Q.MODES.includes(store.get('mode', '가사')) ? store.get('mode', '가사') : '가사',
     era: ERA_LABEL[store.get('era', 'all')] ? store.get('era', 'all') : 'all',
     artist: db.byArtist.has(store.get('artist', null)) ? store.get('artist', null) : null,
     timeLimit: store.get('time', 40),
     limit: 10, deck: [], q: null, qMode: null, qNo: 0,
     correct: 0, score: 0, streak: 0, bestStreak: 0, hints: 0,
     locked: true, timer: null, remain: 0, paused: false, nextT: null,
+    runId: 0, prep: null, warnedOffline: false,
   };
 
   // ───── 메시지 출력 ─────
@@ -95,10 +106,15 @@
   // ───── 게임 진행 ─────
   const modeLabel = () => MODE_LABEL[S.mode];
   function filterLabel() {
-    if (S.mode === '가사') return '';
     return '연대: ' + ERA_LABEL[S.era] + (S.artist ? ' · 가수: ' + esc(S.artist) : '');
   }
-  const pool = () => (S.mode === '가사' ? customList() : Q.filterPool(db, S));
+  // 가사 모드: 수록곡(가사는 LRCLIB 에서) + 직접 추가한 가사 문제
+  const pool = () => (S.mode === '가사' ? [...Q.filterPool(db, S), ...customList()] : Q.filterPool(db, S));
+  function takeSong() {
+    if (!S.deck.length) S.deck = shuffle(pool().slice());
+    return S.deck.pop() || null;
+  }
+  const prepare = () => Q.prepareQuestion({ mode: S.mode, takeSong, getLyrics });
 
   function start(arg) {
     if (S.running) return say('이미 게임이 진행 중이에요! 그만하려면 <code>/종료</code>');
@@ -106,30 +122,42 @@
     if (isNaN(n) || n < 0) n = 10;
     n = Math.min(n, 999);
     const p = pool();
-    if (!p.length) {
-      if (S.mode === '가사') return say('가사 문제가 아직 없어요 😢<br><code>/추가 제목 | 가수 | 연도 | 가사</code> 로 먼저 추가하거나<br>js/custom.js 파일에 적어주세요.');
-      return say('조건에 맞는 노래가 없어요. <code>/연대 전체</code> 또는 <code>/가수</code> 로 필터를 풀어보세요.');
-    }
-    Object.assign(S, { running: true, limit: n, deck: shuffle(p.slice()), qNo: 0, correct: 0, score: 0, streak: 0, bestStreak: 0, q: null, locked: true });
+    if (!p.length) return say('조건에 맞는 노래가 없어요. <code>/연대 전체</code> 또는 <code>/가수</code> 로 필터를 풀어보세요.');
+    S.runId++;
+    Object.assign(S, { running: true, limit: n, deck: shuffle(p.slice()), qNo: 0, correct: 0, score: 0, streak: 0, bestStreak: 0, q: null, locked: true, prep: null });
+    S.prep = prepare(); // 첫 문제 가사 미리 불러오기
     say(`🎮 <b>게임 시작!</b><br>모드: <b>${modeLabel()}</b><br>문제 수: <b>${n ? n + '문제' : '무한'}</b> · 제한시간: <b>${S.timeLimit ? S.timeLimit + '초' : '없음'}</b>` +
       `${filterLabel() ? '<br>' + filterLabel() : ''} <span style="opacity:.7">(${p.length}곡 중 출제)</span>`);
     S.nextT = setTimeout(next, 900);
   }
 
-  function next() {
+  async function next() {
     S.nextT = null;
     if (!S.running) return;
     if (S.limit && S.qNo >= S.limit) return finish(false);
-    if (!S.deck.length) S.deck = shuffle(pool().slice());
-    if (!S.deck.length) return finish(false);
-    const q = S.deck.pop();
-    Object.assign(S, { q, hints: 0, locked: true });
+    const run = S.runId;
+    const p = S.prep || prepare();
+    S.prep = null;
+    const slow = setTimeout(() => { if (S.running && S.runId === run) say('🔎 가사 불러오는 중…', 0); }, 1200);
+    let item = null;
+    try { item = await p; } catch (e) { item = null; }
+    clearTimeout(slow);
+    if (!S.running || S.runId !== run) return;
+    if (!item) return finish(false);
+    if (item.fallback === 'offline' && !S.warnedOffline) {
+      S.warnedOffline = true;
+      say('⚠ 가사 서버(LRCLIB)에 연결이 안 돼요. 연결될 때까지 초성 퀴즈로 낼게요.', 0);
+    } else if (item.fallback === 'notfound') {
+      say('가사를 찾지 못한 곡이라 이번 문제는 초성 퀴즈로 낼게요.', 0);
+    }
+    const q = item.q;
+    Object.assign(S, { q, qMode: item.mode, hints: 0, locked: true });
     S.qNo++;
-    S.qMode = S.mode === '랜덤' ? (Math.random() < 0.5 ? '초성' : '가수') : S.mode;
     const no = `문제 ${S.qNo}${S.limit ? ' / ' + S.limit : ''}`;
     say(Q.questionHTML(q, S.qMode, no), 250).then(() => {
       if (S.running && S.q === q) { S.locked = false; startTimer(); }
     });
+    if (!S.limit || S.qNo < S.limit) S.prep = prepare(); // 다음 문제 미리 준비
   }
 
   function hint(auto) {
@@ -175,6 +203,8 @@
     if (manual && S.q && !S.locked) say(`이번 문제 정답은…${Q.card(S.q)}`, 100);
     const played = S.qNo;
     S.running = false;
+    S.runId++;
+    S.prep = null;
     S.q = null;
     S.locked = true;
     renderTimer();
@@ -204,11 +234,7 @@
     if (guardRunning('모드')) return;
     S.mode = key;
     store.set('mode', key);
-    let extra = '';
-    if (key === '가사') {
-      const n = customList().length;
-      extra = n ? `<br>등록된 가사 문제 ${n}개` : '<br>아직 가사 문제가 없어요. <code>/추가 제목 | 가수 | 연도 | 가사</code> 로 추가해주세요.';
-    }
+    const extra = key === '가사' ? '<br>가사는 LRCLIB에서 불러와요 (인터넷 연결 필요)' : '';
     say(`✅ 모드 변경: <b>${modeLabel()}</b>${extra}`);
   }
   function setEra(arg) {
@@ -388,7 +414,8 @@
       gen++;
       stopTimer();
       clearTimeout(S.nextT);
-      Object.assign(S, { running: false, q: null, locked: true });
+      S.runId++;
+      Object.assign(S, { running: false, q: null, locked: true, prep: null });
       setTimerText('');
     },
   };

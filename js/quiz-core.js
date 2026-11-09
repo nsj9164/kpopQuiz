@@ -57,7 +57,7 @@
   const ERA_LABEL = { '90': '90년대', '00': '2000년대', '10': '2010년대', '20': '2020년대', all: '전체' };
   const eraLabel = (y) => (y ? ERA_LABEL[eraKey(y)] : '연도 미상');
   const MODES = ['초성', '가수', '가사', '랜덤'];
-  const MODE_LABEL = { 초성: '초성 퀴즈', 가수: '가수 맞추기', 가사: '가사 퀴즈 (내 문제)', 랜덤: '랜덤 (초성+가수)' };
+  const MODE_LABEL = { 초성: '초성 퀴즈', 가수: '가수 맞추기', 가사: '가사 퀴즈', 랜덤: '랜덤 (가사+초성+가수)' };
 
   // null = 값 없음(현재 설정 보여주기), undefined = 잘못된 값
   function parseMode(arg) {
@@ -72,12 +72,12 @@
   }
 
   // ───── 데이터 ─────
-  function buildDB(raw, aliases) {
+  function buildDB(raw, aliases, enNames) {
     const songs = (raw || []).map((r, i) => ({ id: i, title: r[0], reading: r[1] || r[0], artist: r[2], year: r[3], alias: r[4] || [] }));
     const byArtist = new Map();
     songs.forEach((s) => { if (!byArtist.has(s.artist)) byArtist.set(s.artist, []); byArtist.get(s.artist).push(s); });
     const years = songs.map((s) => s.year);
-    return { songs, byArtist, aliases: aliases || {}, minYear: Math.min(...years), maxYear: Math.max(...years) };
+    return { songs, byArtist, aliases: aliases || {}, en: enNames || {}, minYear: Math.min(...years), maxYear: Math.max(...years) };
   }
   function filterPool(db, opt) {
     let p = db.songs;
@@ -132,7 +132,7 @@
       return `<div class="q-head">🎤 ${no} · 가수 맞추기</div><div class="q-title">「${esc(q.title)}」</div><div class="q-meta">📅 ${q.year}년 · 이 노래를 부른 가수는?</div>`;
     }
     if (mode === '가사') {
-      return `<div class="q-head">📝 ${no} · 가사 퀴즈</div><div class="q-lyric">${esc(q.lyric)}</div><div class="q-meta">${q.year ? '📅 ' + eraLabel(q.year) + ' · ' : ''}이 노래의 제목은?</div>`;
+      return `<div class="q-head">📝 ${no} · 가사 퀴즈</div><div class="q-lyric">${esc(q.lyric)}</div><div class="q-meta">${q.year ? '📅 ' + eraLabel(q.year) + ' · ' : ''}이 노래의 제목은?${q.src ? ` <span style="opacity:.6">· 가사 출처 ${esc(q.src)}</span>` : ''}</div>`;
     }
     return `<div class="q-head">🎵 ${no} · 초성 퀴즈</div><div class="q-cho">${esc(choMask(q.reading))}</div><div class="q-meta">📅 ${eraLabel(q.year)} · ${titleKind(q.title)}</div>`;
   }
@@ -144,9 +144,9 @@
       return `첫 글자: <span class="cho-inline">${esc(artistMask(q.artist, true))}</span>`;
     }
     if (mode === '가사') {
-      if (n === 1) return `제목 초성: <span class="cho-inline">${esc(choMask(q.reading))}</span>`;
-      if (n === 2) return `가수: <b>${esc(q.artist)}</b>`;
-      return `첫 글자: <span class="cho-inline">${esc(choMask(q.reading, true))}</span>`;
+      if (n === 1) return q.lyricNext ? `다음 소절: <span class="q-lyric-inline">${esc(q.lyricNext)}</span>` : `가수 초성: <span class="cho-inline">${esc(artistMask(q.artist))}</span>`;
+      if (n === 2) return `가수: <b>${esc(q.artist)}</b>${q.year ? ' · ' + q.year + '년' : ''}`;
+      return `제목 초성: <span class="cho-inline">${esc(choMask(q.reading))}</span>`;
     }
     if (n === 1) return `가수 초성: <span class="cho-inline">${esc(artistMask(q.artist))}</span> · ${q.year}년 발매`;
     if (n === 2) return `가수: <b>${esc(q.artist)}</b>`;
@@ -161,6 +161,114 @@
   }
   function grade(rate) {
     return rate >= 90 ? '케이팝 고인물 👑' : rate >= 70 ? '찐팬 인정 💖' : rate >= 40 ? '좀 듣는 편 🎧' : '노래방 입문자 🎤';
+  }
+
+  // ───── 가사 (LRCLIB) ─────
+  const LRCLIB_SEARCH = 'https://lrclib.net/api/search?q=';
+
+  // 가사 텍스트 → 문제로 쓸 수 있는 줄 목록 ([Chorus] 같은 표시는 제외)
+  function lyricLines(plain) {
+    return String(plain || '').split(/\r?\n/)
+      .map((s) => s.replace(/\s+/g, ' ').trim())
+      .filter((s) => s && !/^[\[(（].*[\])）]$/.test(s) && !/^(verse|chorus|hook|bridge|pre-chorus|intro|outro|rap)\b/i.test(s));
+  }
+  // 줄 안에 들어간 제목을 ♪♪♪ 로 가림
+  function maskTitle(line, song) {
+    const parts = [song.title.replace(/\(.*?\)/g, '').trim(), song.reading.replace(/\(.*?\)/g, '').trim(), ...(song.alias || [])]
+      .filter((p) => p && p.length >= 2)
+      .sort((a, b) => b.length - a.length);
+    let out = line;
+    for (const p of parts) {
+      let src = p.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s*');
+      if (/^[\w\s'&.-]+$/.test(p)) src = `\\b${src}\\b`;
+      out = out.replace(new RegExp(src, 'gi'), '♪♪♪');
+    }
+    return out.slice(0, 90);
+  }
+  // 문제용 두 줄 + 힌트용 다음 줄 고르기 (가능하면 제목이 안 들어간 곳으로)
+  function pickSnippet(plain, song) {
+    const lines = lyricLines(plain);
+    if (lines.length < 6) return null;
+    const ans = songAnswers(song).filter((a) => a.length >= 2);
+    const hasTitle = (l) => { const n = norm(l); return ans.some((a) => n.includes(a)); };
+    const preferHangul = lines.some((l) => /[가-힣]/.test(l));
+    const ok = (i) => {
+      const a = lines[i], b = lines[i + 1];
+      if (!a || !b || norm(a) === norm(b)) return false;
+      if (a.length + b.length < 10) return false;
+      if (hasTitle(a) || hasTitle(b)) return false;
+      if (preferHangul && !/[가-힣]/.test(a + b)) return false;
+      return true;
+    };
+    const order = shuffle([...Array(lines.length - 1).keys()]);
+    const i = order.find(ok) !== undefined ? order.find(ok) : order[0];
+    return {
+      text: [lines[i], lines[i + 1]].map((l) => maskTitle(l, song)).join('\n'),
+      next: lines[i + 2] ? maskTitle(lines[i + 2], song) : null,
+    };
+  }
+  // 검색 결과 중 이 노래가 맞는 것 고르기 (제목·가수 일치, 한글 가사 우선)
+  function chooseLyrics(results, song, db) {
+    if (!Array.isArray(results)) return null;
+    const titles = songAnswers(song);
+    const arts = [...artistAnswers(song.artist, db.aliases), norm((db.en || {})[song.artist])].filter((a) => a && a.length >= 2);
+    let best = null, bestScore = -1;
+    for (const r of results) {
+      if (!r || r.instrumental || !r.plainLyrics) continue;
+      const t = norm(String(r.trackName || '').replace(/\(.*?\)/g, '')) || norm(r.trackName);
+      const a = norm(r.artistName);
+      const tOk = titles.some((x) => x === t || (x.length >= 3 && t.length >= 2 && (t.includes(x) || x.includes(t))));
+      const aOk = arts.some((x) => a.includes(x) || (a.length >= 2 && x.includes(a)));
+      if (!tOk || !aOk) continue;
+      const n = lyricLines(r.plainLyrics).length;
+      if (n < 6) continue;
+      const score = (titles.includes(t) ? 3 : 1) + (/[가-힣]/.test(r.plainLyrics) ? 2 : 0) + Math.min(n, 60) / 60;
+      if (score > bestScore) { bestScore = score; best = r.plainLyrics; }
+    }
+    return best;
+  }
+  // fetchJSON(url) → Promise<json>. 네트워크 오류면 throw, 못 찾으면 null 반환
+  function makeLyricsFetcher(fetchJSON, db) {
+    const cache = new Map();
+    return async function getLyrics(song) {
+      const key = song.title + '|' + song.artist;
+      if (cache.has(key)) return cache.get(key);
+      const main = song.title.replace(/\(.*?\)/g, '').trim() || song.title;
+      const en = (db.en || {})[song.artist];
+      const queries = [...new Set([
+        en && `${main} ${en}`,
+        `${main} ${song.artist}`,
+        en && song.reading !== song.title && `${song.reading} ${en}`,
+      ].filter(Boolean))];
+      let found = null;
+      for (const q of queries) {
+        found = chooseLyrics(await fetchJSON(LRCLIB_SEARCH + encodeURIComponent(q)), song, db);
+        if (found) break;
+      }
+      cache.set(key, found);
+      if (cache.size > 800) cache.delete(cache.keys().next().value);
+      return found;
+    };
+  }
+  // 다음 문제 준비. o = { mode, takeSong(), getLyrics(song) }
+  async function prepareQuestion(o) {
+    const mode = o.mode === '랜덤' ? pick(['가사', '초성', '가수']) : o.mode;
+    if (mode !== '가사') { const s = o.takeSong(); return s ? { q: s, mode } : null; }
+    let netErr = 0;
+    for (let i = 0; i < 8; i++) {
+      const s = o.takeSong();
+      if (!s) return null;
+      if (s.lyric) return { q: s, mode: '가사' }; // 직접 추가한 가사 문제
+      let plain = null;
+      try { plain = await o.getLyrics(s); } catch (e) {
+        if (++netErr >= 2) return { q: s, mode: '초성', fallback: 'offline' };
+        continue;
+      }
+      const snip = plain && pickSnippet(plain, s);
+      if (snip) return { q: Object.assign({}, s, { lyric: snip.text, lyricNext: snip.next, src: 'LRCLIB' }), mode: '가사' };
+    }
+    const s = o.takeSong();
+    return s ? { q: s, mode: '초성', fallback: 'notfound' } : null;
   }
 
   // ───── 안내 문구 ─────
@@ -198,5 +306,6 @@
     eraKey, ERA_LABEL, eraLabel, MODES, MODE_LABEL, parseMode, parseEra,
     buildDB, filterPool, artistAnswers, findArtist, songAnswers, normalizeCustom, parseCustomArg,
     titleKind, checkAnswer, questionHTML, hintText, card, points, grade, helpHTML, statsHTML,
+    lyricLines, maskTitle, pickSnippet, chooseLyrics, makeLyricsFetcher, prepareQuestion,
   };
 });

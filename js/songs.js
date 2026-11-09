@@ -773,3 +773,33 @@ window.ARTIST_ALIASES = {
   "트리플에스": ["triples"], "QWER": ["큐더블유이알"], "하츠투하츠": ["hearts2hearts", "하투하"],
   "올데이 프로젝트": ["alldayproject", "올데프"],
 };
+
+// 가사 검색(LRCLIB)용 영어 가수명
+window.ARTIST_EN = {
+  "H.O.T.": "H.O.T.", "젝스키스": "Sechs Kies", "S.E.S.": "S.E.S.", "핑클": "Fin.K.L", "god": "god", "신화": "Shinhwa",
+  "베이비복스": "Baby V.O.X", "보아": "BoA", "쥬얼리": "Jewelry", "이효리": "Lee Hyori", "비": "Rain", "세븐": "SE7EN",
+  "동방신기": "TVXQ!", "SS501": "SS501", "빅뱅": "BIGBANG", "슈퍼주니어": "Super Junior", "원더걸스": "Wonder Girls",
+  "소녀시대": "Girls' Generation", "태티서": "Girls' Generation-TTS", "카라": "KARA", "2NE1": "2NE1", "샤이니": "SHINee",
+  "f(x)": "f(x)", "미쓰에이": "miss A", "포미닛": "4MINUTE", "비스트": "BEAST", "하이라이트": "Highlight", "티아라": "T-ARA",
+  "애프터스쿨": "After School", "시크릿": "Secret", "씨스타": "SISTAR", "브라운아이드걸스": "Brown Eyed Girls",
+  "인피니트": "INFINITE", "틴탑": "TEEN TOP", "엠블랙": "MBLAQ", "2PM": "2PM", "2AM": "2AM", "씨엔블루": "CNBLUE",
+  "FT아일랜드": "FTISLAND", "유키스": "U-KISS", "제국의아이들": "ZE:A", "B.A.P": "B.A.P", "오렌지캬라멜": "Orange Caramel",
+  "에이핑크": "Apink", "걸스데이": "Girl's Day", "B1A4": "B1A4", "태양": "TAEYANG", "지드래곤": "G-DRAGON", "GD&TOP": "GD&TOP",
+  "CL": "CL", "아이유": "IU", "태연": "TAEYEON", "현아": "HyunA", "선미": "SUNMI", "청하": "CHUNG HA", "화사": "HWASA",
+  "제니": "JENNIE", "로제": "ROSÉ", "리사": "LISA", "지수": "JISOO", "정국": "Jung Kook", "지민": "Jimin", "Agust D": "Agust D",
+  "전소미": "JEON SOMI", "백현": "BAEKHYUN", "태민": "TAEMIN", "권은비": "KWON EUNBI", "강다니엘": "KANG DANIEL",
+  "최예나": "YENA", "지코": "ZICO", "EXO": "EXO", "방탄소년단": "BTS", "빅스": "VIXX", "블락비": "Block B", "위너": "WINNER",
+  "아이콘": "iKON", "마마무": "MAMAMOO", "여자친구": "GFRIEND", "트와이스": "TWICE", "블랙핑크": "BLACKPINK",
+  "레드벨벳": "Red Velvet", "세븐틴": "SEVENTEEN", "부석순": "BSS", "GOT7": "GOT7", "몬스타엑스": "MONSTA X",
+  "오마이걸": "OH MY GIRL", "우주소녀": "WJSN", "러블리즈": "Lovelyz", "AOA": "AOA", "EXID": "EXID", "비투비": "BTOB",
+  "워너원": "Wanna One", "아이오아이": "I.O.I", "펜타곤": "PENTAGON", "모모랜드": "MOMOLAND", "드림캐쳐": "Dreamcatcher",
+  "DAY6": "DAY6", "NCT 127": "NCT 127", "NCT DREAM": "NCT DREAM", "NCT U": "NCT U", "NCT WISH": "NCT WISH",
+  "스트레이 키즈": "Stray Kids", "에이티즈": "ATEEZ", "(여자)아이들": "(G)I-DLE", "있지": "ITZY",
+  "투모로우바이투게더": "TOMORROW X TOGETHER", "에버글로우": "EVERGLOW", "아이즈원": "IZ*ONE", "프로미스나인": "fromis_9",
+  "이달의 소녀": "LOONA", "더보이즈": "THE BOYZ", "트레저": "TREASURE", "SF9": "SF9", "아스트로": "ASTRO",
+  "엔하이픈": "ENHYPEN", "케플러": "Kep1er", "위클리": "Weeekly", "스테이씨": "STAYC", "에스파": "aespa", "아이브": "IVE",
+  "뉴진스": "NewJeans", "르세라핌": "LE SSERAFIM", "엔믹스": "NMIXX", "피프티피프티": "FIFTY FIFTY", "하이키": "H1-KEY",
+  "키스오브라이프": "KISS OF LIFE", "베이비몬스터": "BABYMONSTER", "제로베이스원": "ZEROBASEONE", "라이즈": "RIIZE",
+  "보이넥스트도어": "BOYNEXTDOOR", "투어스": "TWS", "아일릿": "ILLIT", "트리플에스": "tripleS", "QWER": "QWER",
+  "하츠투하츠": "Hearts2Hearts", "올데이 프로젝트": "ALLDAY PROJECT",
+};

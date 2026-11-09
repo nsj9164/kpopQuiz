@@ -26,7 +26,21 @@ function loadWindowScript(rel) {
   }
 }
 const W = loadWindowScript('js/songs.js');
-const db = Q.buildDB(W.SONGS || [], W.ARTIST_ALIASES || {});
+const db = Q.buildDB(W.SONGS || [], W.ARTIST_ALIASES || {}, W.ARTIST_EN || {});
+
+// LRCLIB 가사 불러오기 (서버 메모리에 캐시, 7초 넘으면 포기)
+async function fetchJSON(url) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), 7000);
+  try {
+    const r = await fetch(url, { signal: ctrl.signal, headers: { 'User-Agent': 'kpop-quiz/1.0 (https://github.com/nsj9164/kpopQuiz)' } });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    return await r.json();
+  } finally {
+    clearTimeout(t);
+  }
+}
+const getLyrics = Q.makeLyricsFetcher(fetchJSON, db);
 
 function readCustomStore() {
   try { const v = JSON.parse(fs.readFileSync(DATA_FILE, 'utf8')); return Array.isArray(v) ? v : []; } catch (e) { return []; }
@@ -55,7 +69,7 @@ class Room {
     this.name = name;
     this.players = new Map(); // 비밀 id → { id, pub, name, conns, leaveT }
     this.history = [];
-    this.set = { mode: '초성', era: 'all', artist: null, time: 40 };
+    this.set = { mode: '가사', era: 'all', artist: null, time: 40 };
     this.g = null;
     this.emptyT = null;
   }
@@ -175,7 +189,15 @@ class Room {
   }
 
   // ───── 게임 ─────
-  pool() { return this.set.mode === '가사' ? customList() : Q.filterPool(db, this.set); }
+  // 가사 모드: 수록곡(가사는 LRCLIB 에서) + 직접 추가한 가사 문제
+  pool() { return this.set.mode === '가사' ? [...Q.filterPool(db, this.set), ...customList()] : Q.filterPool(db, this.set); }
+  prepare(g) {
+    return Q.prepareQuestion({
+      mode: g.mode,
+      takeSong: () => { if (!g.deck.length) g.deck = shuffle(this.pool().slice()); return g.deck.pop() || null; },
+      getLyrics,
+    });
+  }
 
   start(p, arg) {
     if (this.g) return this.bot('이미 게임이 진행 중이에요! 그만하려면 <code>/종료</code>');
@@ -183,30 +205,41 @@ class Room {
     if (isNaN(n) || n < 0) n = 10;
     n = Math.min(n, 999);
     const pool = this.pool();
-    if (!pool.length) {
-      if (this.set.mode === '가사') return this.bot('가사 문제가 아직 없어요 😢<br><code>/추가 제목 | 가수 | 연도 | 가사</code> 로 먼저 추가해주세요.');
-      return this.bot('조건에 맞는 노래가 없어요. <code>/연대 전체</code> 또는 <code>/가수</code> 로 필터를 풀어보세요.');
-    }
-    this.g = { limit: n, deck: shuffle(pool.slice()), q: null, qMode: null, qNo: 0, hints: 0, locked: true, remain: 0, tl: 0, timer: null, nextT: null, scores: new Map(), lastWinner: null, streak: 0 };
-    const filter = this.set.mode === '가사' ? '' : `<br>연대: ${ERA_LABEL[this.set.era]}${this.set.artist ? ' · 가수: ' + esc(this.set.artist) : ''}`;
+    if (!pool.length) return this.bot('조건에 맞는 노래가 없어요. <code>/연대 전체</code> 또는 <code>/가수</code> 로 필터를 풀어보세요.');
+    const g = this.g = { mode: this.set.mode, limit: n, deck: shuffle(pool.slice()), q: null, qMode: null, qNo: 0, hints: 0, locked: true, remain: 0, tl: 0, timer: null, nextT: null, scores: new Map(), lastWinner: null, streak: 0, prep: null, warnedOffline: false };
+    g.prep = this.prepare(g); // 첫 문제 가사 미리 불러오기
+    const filter = `<br>연대: ${ERA_LABEL[this.set.era]}${this.set.artist ? ' · 가수: ' + esc(this.set.artist) : ''}`;
     this.bot(`🎮 <b>${esc(p.name)}</b>님이 게임을 시작했어요!<br>모드: <b>${MODE_LABEL[this.set.mode]}</b><br>문제 수: <b>${n ? n + '문제' : '무한'}</b> · 제한시간: <b>${this.set.time ? this.set.time + '초' : '없음'}</b>${filter} <span style="opacity:.7">(${pool.length}곡 중 출제)</span>`);
-    this.g.nextT = setTimeout(() => this.next(), 1500);
+    g.nextT = setTimeout(() => this.next(), 1500);
   }
 
-  next() {
+  async next() {
     const g = this.g;
     if (!g) return;
     g.nextT = null;
     if (g.limit && g.qNo >= g.limit) return this.finish(false);
-    if (!g.deck.length) g.deck = shuffle(this.pool().slice());
-    if (!g.deck.length) return this.finish(false);
-    g.q = g.deck.pop();
+    const p = g.prep || this.prepare(g);
+    g.prep = null;
+    const slow = setTimeout(() => { if (this.g === g) this.bot('🔎 가사 불러오는 중…'); }, 1200);
+    let item = null;
+    try { item = await p; } catch (e) { item = null; }
+    clearTimeout(slow);
+    if (this.g !== g) return; // 기다리는 사이 게임이 끝남
+    if (!item) return this.finish(false);
+    if (item.fallback === 'offline' && !g.warnedOffline) {
+      g.warnedOffline = true;
+      this.bot('⚠ 가사 서버(LRCLIB)에 연결이 안 돼요. 연결될 때까지 초성 퀴즈로 낼게요.');
+    } else if (item.fallback === 'notfound') {
+      this.bot('가사를 찾지 못한 곡이라 이번 문제는 초성 퀴즈로 낼게요.');
+    }
+    g.q = item.q;
+    g.qMode = item.mode;
     g.qNo++;
     g.hints = 0;
-    g.qMode = this.set.mode === '랜덤' ? (Math.random() < 0.5 ? '초성' : '가수') : this.set.mode;
     this.bot(Q.questionHTML(g.q, g.qMode, `문제 ${g.qNo}${g.limit ? ' / ' + g.limit : ''}`));
     g.locked = false;
     this.startTimer();
+    if (!g.limit || g.qNo < g.limit) g.prep = this.prepare(g); // 다음 문제 미리 준비
   }
 
   startTimer() {
@@ -316,7 +349,7 @@ class Room {
     if (!key) return this.bot('모드는 <b>초성 · 가수 · 가사 · 랜덤</b> 중에서 골라주세요.');
     if (this.guard('모드')) return;
     this.set.mode = key;
-    const extra = key === '가사' ? `<br>등록된 가사 문제 ${customList().length}개` : '';
+    const extra = key === '가사' ? '<br>가사는 LRCLIB에서 불러와요' : '';
     this.bot(`✅ 모드 변경: <b>${MODE_LABEL[key]}</b>${extra}`);
   }
   setEra(arg) {
