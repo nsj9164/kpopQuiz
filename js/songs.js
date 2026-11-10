@@ -772,6 +772,19 @@ window.ARTIST_ALIASES = {
   "보이넥스트도어": ["boynextdoor", "보넥도"], "투어스": ["tws"], "아일릿": ["illit"],
   "트리플에스": ["triples"], "QWER": ["큐더블유이알"], "하츠투하츠": ["hearts2hearts", "하투하"],
   "올데이 프로젝트": ["alldayproject", "올데프"],
+  // 추가 가수 (노래는 songs-extra.js)
+  "클릭비": ["clickb"], "플라이 투 더 스카이": ["flytothesky", "플투스"], "씨야": ["seeya"], "다비치": ["davichi"],
+  "샤크라": ["chakra"], "보이프렌드": ["boyfriend"], "레인보우": ["rainbow"],
+  "달샤벳": ["dalshabet"], "크레용팝": ["crayonpop"], "헬로비너스": ["hellovenus"], "피에스타": ["fiestar"],
+  "에일리": ["ailee"], "효린": ["hyolyn"], "소유": ["soyou"], "손담비": ["sondambi"], "이하이": ["leehi"],
+  "JYJ": ["제이와이제이"], "뉴이스트": ["nuest"], "업텐션": ["up10tion", "업텐"], "브레이브걸스": ["bravegirls", "브브걸"],
+  "에이프릴": ["april"], "라붐": ["laboum"], "다이아": ["dia"], "구구단": ["gugudan"], "위키미키": ["wekimeki"],
+  "프리스틴": ["pristin"], "골든차일드": ["goldenchild", "골차"], "온앤오프": ["onf"], "엔플라잉": ["nflying"],
+  "로켓펀치": ["rocketpunch"], "체리블렛": ["cherrybullet"], "원어스": ["oneus"], "크래비티": ["cravity"],
+  "위아이": ["wei"], "피원하모니": ["p1harmony", "피원"], "엑스디너리 히어로즈": ["xdinaryheroes", "엑디즈"],
+  "퍼플키스": ["purplekiss"], "빌리": ["billlie"], "클라씨": ["classy"], "비비지": ["viviz"], "플레이브": ["plave"],
+  "영파씨": ["youngposse"], "유니스": ["unis"], "이즈나": ["izna"], "미야오": ["meovv"], "키키": ["kiiikiii"],
+  "리센느": ["rescene"], "코르티스": ["cortis"],
 };
 
 // 가사 검색(LRCLIB)용 영어 가수명
@@ -802,4 +815,14 @@ window.ARTIST_EN = {
   "키스오브라이프": "KISS OF LIFE", "베이비몬스터": "BABYMONSTER", "제로베이스원": "ZEROBASEONE", "라이즈": "RIIZE",
   "보이넥스트도어": "BOYNEXTDOOR", "투어스": "TWS", "아일릿": "ILLIT", "트리플에스": "tripleS", "QWER": "QWER",
   "하츠투하츠": "Hearts2Hearts", "올데이 프로젝트": "ALLDAY PROJECT",
+  // 추가 가수 (노래는 songs-extra.js)
+  "클릭비": "Click-B", "플라이 투 더 스카이": "Fly to the Sky", "씨야": "SeeYa", "다비치": "Davichi", "샤크라": "Chakra",
+  "보이프렌드": "BOYFRIEND", "레인보우": "RAINBOW", "달샤벳": "Dal Shabet", "크레용팝": "Crayon Pop",
+  "헬로비너스": "HELLOVENUS", "피에스타": "FIESTAR", "에일리": "Ailee", "효린": "HYOLYN", "소유": "SOYOU", "손담비": "Son Dam Bi",
+  "이하이": "LEE HI", "JYJ": "JYJ", "뉴이스트": "NU'EST", "업텐션": "UP10TION", "브레이브걸스": "Brave Girls", "에이프릴": "APRIL",
+  "라붐": "LABOUM", "다이아": "DIA", "구구단": "gugudan", "위키미키": "Weki Meki", "프리스틴": "PRISTIN", "골든차일드": "Golden Child",
+  "온앤오프": "ONF", "엔플라잉": "N.Flying", "로켓펀치": "Rocket Punch", "체리블렛": "Cherry Bullet", "원어스": "ONEUS",
+  "크래비티": "CRAVITY", "위아이": "WEi", "피원하모니": "P1Harmony", "엑스디너리 히어로즈": "Xdinary Heroes", "퍼플키스": "PURPLE KISS",
+  "빌리": "Billlie", "클라씨": "CLASS:y", "비비지": "VIVIZ", "플레이브": "PLAVE", "영파씨": "YOUNG POSSE", "유니스": "UNIS",
+  "이즈나": "izna", "미야오": "MEOVV", "키키": "KiiiKiii", "리센느": "RESCENE", "코르티스": "CORTIS",
 };

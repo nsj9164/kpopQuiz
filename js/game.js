@@ -13,7 +13,7 @@
     set(k, v) { try { localStorage.setItem('kq.' + k, JSON.stringify(v)); } catch (e) { /* ignore */ } },
   };
 
-  const db = Q.buildDB(window.SONGS, window.ARTIST_ALIASES, window.ARTIST_EN);
+  const db = Q.buildDB([...window.SONGS, ...(window.SONGS_EXTRA || [])], window.ARTIST_ALIASES, window.ARTIST_EN);
   const customList = () => Q.normalizeCustom([...(Array.isArray(window.CUSTOM_QUESTIONS) ? window.CUSTOM_QUESTIONS : []), ...store.get('custom', [])]);
 
   // LRCLIB 에서 가사 불러오기 (7초 넘으면 포기)

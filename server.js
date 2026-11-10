@@ -26,7 +26,8 @@ function loadWindowScript(rel) {
   }
 }
 const W = loadWindowScript('js/songs.js');
-const db = Q.buildDB(W.SONGS || [], W.ARTIST_ALIASES || {}, W.ARTIST_EN || {});
+const EXTRA = loadWindowScript('js/songs-extra.js').SONGS_EXTRA || []; // tools/build-songs.js 로 만든 추가 곡
+const db = Q.buildDB([...(W.SONGS || []), ...EXTRA], W.ARTIST_ALIASES || {}, W.ARTIST_EN || {});
 
 // LRCLIB 가사 불러오기 (서버 메모리에 캐시, 7초 넘으면 포기)
 async function fetchJSON(url) {
