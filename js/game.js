@@ -186,7 +186,8 @@
     say(`💡 ${auto ? '자동 ' : ''}힌트 ${S.hints}/3<br>${Q.hintText(S.q, S.qMode, S.hints, db.byArtist)}`, auto ? 0 : 250);
   }
 
-  function correct() {
+  const answerCard = (r) => Q.revealCard(S.q, S.qMode, r);
+  function correct(r) {
     S.locked = true;
     stopTimer();
     S.correct++;
@@ -197,7 +198,7 @@
     S.score += pts.total;
     store.set('lifetime', store.get('lifetime', 0) + 1);
     const cheers = ['🎉 정답!', '👏 정답이에요!', '✨ 딩동댕!', '💯 정답!', '🔥 맞았어요!'];
-    say(`<b>${pick(cheers)}</b> +${pts.total}점${pts.bonus ? ` (🔥 ${S.streak}연속 보너스 +${pts.bonus})` : ''}${Q.card(S.q)}`, 200);
+    say(`<b>${pick(cheers)}</b> +${pts.total}점${pts.bonus ? ` (🔥 ${S.streak}연속 보너스 +${pts.bonus})` : ''}${answerCard(r)}`, 200);
     scheduleNext(1700);
   }
   function timeout() {
@@ -205,7 +206,7 @@
     S.locked = true;
     S.streak = 0;
     reveal();
-    say(`⌛ 시간 초과! 정답은…${Q.card(S.q)}`, 0);
+    say(`⌛ 시간 초과! 정답은…${answerCard()}`, 0);
     // 아무것도 안 치고 3문제 연속 시간 초과 = 자리 비움 → 끝
     if (++S.idle >= 3) { say('😴 3문제 연속으로 입력이 없어서 게임을 끝낼게요.', 0); return finish(false); }
     scheduleNext(2000);
@@ -216,7 +217,7 @@
     stopTimer();
     S.streak = 0;
     reveal();
-    say(`⏭ 패스! 정답은…${Q.card(S.q)}`, 200);
+    say(`⏭ 패스! 정답은…${answerCard()}`, 200);
     scheduleNext(1800);
   }
   function reveal() {
@@ -246,7 +247,7 @@
   function finish(manual) {
     stopTimer();
     clearTimeout(S.nextT);
-    if (manual && S.q && !S.locked) say(`이번 문제 정답은…${Q.card(S.q)}`, 100);
+    if (manual && S.q && !S.locked) say(`이번 문제 정답은…${answerCard()}`, 100);
     const played = S.qNo;
     S.running = false;
     S.runId++;
@@ -414,13 +415,14 @@
   }
   function setMode(arg) {
     const key = Q.parseMode(arg);
-    if (key === null) return say(`현재 모드: <b>${modeLabel()}</b><br><code>/모드 초성</code> · <code>/모드 가수</code> · <code>/모드 가사</code> · <code>/모드 랜덤</code><br><code>/모드 얼굴</code> 사진 보고 아이돌 이름 · <code>/모드 자켓</code> 앨범 자켓 보고 타이틀곡`);
-    if (!key) return say('모드는 <b>초성 · 가수 · 가사 · 랜덤 · 얼굴 · 자켓</b> 중에서 골라주세요.');
+    if (key === null) return say(`현재 모드: <b>${modeLabel()}</b><br><code>/모드 초성</code> · <code>/모드 가수</code> · <code>/모드 가사</code> · <code>/모드 랜덤</code><br><code>/모드 부르기</code> 제목 보고 가사 한 소절 적기<br><code>/모드 얼굴</code> 사진 보고 아이돌 이름 · <code>/모드 자켓</code> 앨범 자켓 보고 타이틀곡`);
+    if (!key) return say('모드는 <b>초성 · 가수 · 가사 · 랜덤 · 부르기 · 얼굴 · 자켓</b> 중에서 골라주세요.');
     if (key === '릴레이') return say('🎤 노래 릴레이는 친구랑 돌아가면서 하는 <b>멀티 전용</b> 모드예요.<br><b>start.bat</b> 으로 실행해서 멀티 방에서 해주세요.');
     if (guardRunning('모드')) return;
     S.mode = key;
     store.set('mode', key);
     const extra = key === '가사' ? '<br>가사는 LRCLIB에서 불러와요 (인터넷 연결 필요)'
+      : key === '부르기' ? `<br>🎙 ${Q.SING_HELP}<br>가사는 LRCLIB에서 불러와요 (인터넷 연결 필요)`
       : key === '얼굴' ? `<br>📸 에디터에 사진이 흐릿하게 열리고 점점 선명해져요. 빨리 맞힐수록 점수 ↑ (${idols.length}명)<br>이름은 예명·본명·영어 다 OK · 사진: 위키미디어 공용`
       : key === '자켓' ? `<br>💿 에디터에 앨범 자켓이 흐릿하게 열리고 점점 선명해져요. 그 앨범 타이틀곡 제목을 맞히면 정답 (${covers.length}장)`
       : '';
@@ -546,10 +548,11 @@
     if (!isSlash && W.running) return wcInput(t, meEl, cmd);
     if (!isSlash && S.running && S.q && !S.locked) {
       const r = Q.checkAnswer(t, S.q, S.qMode, db.aliases);
-      if (r.ok) { meEl.classList.add('ok'); return correct(); }
+      if (r.ok) { meEl.classList.add('ok'); return correct(r); }
       if (!NOSLASH.has(cmd)) {
         meEl.classList.add('wrong');
-        if (r.close) say('🤏 아까워요! 거의 맞았어요', 150);
+        const miss = Q.missText(r, S.qMode);
+        if (miss) say(miss, 150);
         return;
       }
     }

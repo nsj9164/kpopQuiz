@@ -56,9 +56,9 @@
   const eraKey = (y) => (y < 2000 ? '90' : y < 2010 ? '00' : y < 2020 ? '10' : '20');
   const ERA_LABEL = { '90': '90년대', '00': '2000년대', '10': '2010년대', '20': '2020년대', all: '전체' };
   const eraLabel = (y) => (y ? ERA_LABEL[eraKey(y)] : '연도 미상');
-  const MODES = ['초성', '가수', '가사', '랜덤', '얼굴', '자켓', '릴레이']; // 릴레이는 멀티 전용
+  const MODES = ['초성', '가수', '가사', '랜덤', '부르기', '얼굴', '자켓', '릴레이']; // 릴레이는 멀티 전용
   const MODE_LABEL = {
-    초성: '초성 퀴즈', 가수: '가수 맞추기', 가사: '가사 퀴즈', 랜덤: '랜덤 (가사+초성+가수)',
+    초성: '초성 퀴즈', 가수: '가수 맞추기', 가사: '가사 퀴즈', 랜덤: '랜덤 (가사+초성+가수)', 부르기: '노래 부르기 (제목 보고 가사 한 소절)',
     얼굴: '얼굴 퀴즈 (사진 보고 아이돌 이름)', 자켓: '자켓 퀴즈 (앨범 자켓 보고 타이틀곡)', 릴레이: '노래 릴레이 (가수 보고 노래 쭉 적기)',
   };
   const IMAGE_MODES = new Set(['얼굴', '자켓']);
@@ -69,6 +69,7 @@
     if (!m) return null;
     return MODES.find((x) => x === m) || {
       chosung: '초성', artist: '가수', lyric: '가사', lyrics: '가사', random: '랜덤', 제목: '초성',
+      sing: '부르기', 노래부르기: '부르기', 노래방: '부르기', 떼창: '부르기', 가사쓰기: '부르기', 가사적기: '부르기', 소절: '부르기', 부르기퀴즈: '부르기',
       relay: '릴레이', 노래릴레이: '릴레이', 쭉적기: '릴레이', 노래쭉적기: '릴레이', 노래적기: '릴레이',
       face: '얼굴', 사진: '얼굴', 아이돌: '얼굴', 멤버: '얼굴', 얼굴보고: '얼굴',
       cover: '자켓', jacket: '자켓', album: '자켓', 재킷: '자켓', 앨범: '자켓', 커버: '자켓', 앨범자켓: '자켓', 앨범재킷: '자켓', 앨범커버: '자켓', 타이틀곡: '자켓',
@@ -162,6 +163,7 @@
     return '한글 제목';
   }
   function checkAnswer(text, q, mode, aliases) {
+    if (mode === '부르기') return singCheck(text, q);
     const n = norm(text);
     if (!n) return { ok: false, close: false };
     const answers = mode === '가수' ? artistAnswers(q.artist, aliases) : q.answers || songAnswers(q);
@@ -186,6 +188,9 @@
     if (mode === '가수') {
       return `<div class="q-head">🎤 ${no} · 가수 맞추기</div><div class="q-title">「${esc(q.title)}」</div><div class="q-meta">📅 ${q.year}년 · 이 노래를 부른 가수는?</div>`;
     }
+    if (mode === '부르기') {
+      return `<div class="q-head">🎙 ${no} · 노래 부르기</div><div class="q-title">「${esc(q.title)}」</div><div class="q-meta">${esc(q.artist)}${q.year ? ' · ' + q.year + '년' : ''} · 이 노래 가사 한 소절을 적어주세요 (아무 부분이나, 한글 6글자 이상)</div>`;
+    }
     if (mode === '가사') {
       return `<div class="q-head">📝 ${no} · 가사 퀴즈</div><div class="q-lyric">${esc(q.lyric)}</div><div class="q-meta">${q.year ? '📅 ' + eraLabel(q.year) + ' · ' : ''}이 노래의 제목은?${q.src ? ` <span style="opacity:.6">· 가사 출처 ${esc(q.src)}</span>` : ''}</div>`;
     }
@@ -209,6 +214,12 @@
       if (n === 2) return `가수 초성: <span class="cho-inline">${esc(artistMask(q.artist))}</span>`;
       return `첫 글자: <span class="cho-inline">${esc(artistMask(q.artist, true))}</span>`;
     }
+    if (mode === '부르기') { // 후렴 한 줄: 초성 → 앞 절반 → 전체
+      const h = q.sing.hook;
+      if (n === 1) return `이 소절 어때요? <span class="cho-inline">${esc(singMask(h, 0))}</span>`;
+      if (n === 2) return `<span class="cho-inline">${esc(singMask(h, 0.5))}</span>`;
+      return `그대로 따라 적어보세요: <span class="q-lyric-inline">${esc(h)}</span>`;
+    }
     if (mode === '가사') {
       if (n === 1) return q.lyricNext ? `다음 소절: <span class="q-lyric-inline">${esc(q.lyricNext)}</span>` : `가수 초성: <span class="cho-inline">${esc(artistMask(q.artist))}</span>`;
       if (n === 2) return `가수: <b>${esc(q.artist)}</b>${q.year ? ' · ' + q.year + '년' : ''}`;
@@ -219,6 +230,22 @@
     return `첫 글자: <span class="cho-inline">${esc(choMask(q.reading, true))}</span>`;
   }
   const card = (q) => `<div class="card"><div class="ct">${esc(q.title)}</div><div class="ca">${esc(q.artist)}${q.year ? ' · ' + q.year : ''}</div></div>`;
+  // 정답 공개 카드. 노래 부르기는 맞힌 소절 + 다음 소절, 못 맞혔으면 후렴 한 줄을 같이 보여줌
+  function revealCard(q, mode, r) {
+    if (mode !== '부르기' || !q.sing) return card(q);
+    if (r && r.lines) {
+      return `${card(q)}<div class="q-lyric">${esc(r.lines.join('\n'))}</div>${r.next ? `<div class="q-meta">♪ 다음 소절: <span class="q-lyric-inline">${esc(r.next)}</span></div>` : ''}`;
+    }
+    return `${card(q)}<div class="q-meta">이런 소절이 있었어요</div><div class="q-lyric">${esc(q.sing.hook)}</div>`;
+  }
+  // 틀렸을 때 안내 (없으면 ''). name: 멀티에서 누구한테 하는 말인지
+  function missText(r, mode, name) {
+    const who = name ? `${esc(name)}님 ` : '';
+    if (r.why === 'short') return `🤏 ${who}맞는 가사예요! 조금만 더 길게 적어주세요 (한글 6글자 이상)`;
+    if (r.why === 'title') return `🎙 ${who}제목 말고 <b>가사</b>를 더 적어주세요 (제목 빼고 한글 6글자 이상)`;
+    if (r.close) return `🤏 ${who}아까워요! ${mode === '부르기' ? '가사가 조금 달라요' : '거의 맞았어요'}`;
+    return '';
+  }
   // 힌트 0~3개 → 10/7/5/3점, 3연속부터 보너스
   function points(hints, streak) {
     const base = [10, 7, 5, 3][Math.min(hints, 3)];
@@ -273,6 +300,109 @@
       next: lines[i + 2] ? maskTitle(lines[i + 2], song) : null,
     };
   }
+  // ───── 노래 부르기: 제목 보고 가사 한 소절 적기 ─────
+  // 가사 길이 점수: 한글 1글자 = 2, 영어·숫자 1글자 = 1. 12점(한글 6글자, 영어 12글자) 이상이어야 인정
+  const SING_MIN = 12;
+  const SING_HELP = '제목이 나오면 그 노래 가사를 아무 소절이나 채팅으로 적으면 정답! (띄어쓰기 무시, 한글 6글자 이상, 길게 쓰면 오타 조금 OK)';
+  const lyricWeight = (n) => [...n].reduce((s, c) => s + (isHangul(c) ? 2 : 1), 0);
+  const distinctChars = (n) => new Set(n).size;
+  // 제목 표기를 빼고 남은 부분 (제목만 치는 건 가사로 안 침)
+  function withoutTitle(n, titles) {
+    let rest = n;
+    for (const t of titles) rest = rest.split(t).join('');
+    return rest;
+  }
+  // 이 정도면 가사 한 소절로 인정: 충분히 길고, "oh oh oh" 같은 반복이 아님
+  const singEnough = (n, titles) => lyricWeight(withoutTitle(n, titles)) >= SING_MIN && distinctChars(n) >= 4;
+
+  // 긴 문자열 t 안에서 p 와 가장 비슷한 부분 찾기 (오타 허용 부분 문자열 검색) → { d: 고쳐야 할 글자 수, end }
+  function fuzzyFind(p, t) {
+    const exact = t.indexOf(p);
+    if (exact >= 0) return { d: 0, end: exact + p.length };
+    const m = p.length;
+    let prev = new Int32Array(m + 1), cur = new Int32Array(m + 1);
+    for (let i = 0; i <= m; i++) prev[i] = i;
+    let best = m, end = 0;
+    for (let j = 1; j <= t.length; j++) {
+      cur[0] = 0; // 가사 어디서 시작해도 됨
+      const tc = t[j - 1];
+      for (let i = 1; i <= m; i++) cur[i] = Math.min(prev[i] + 1, cur[i - 1] + 1, prev[i - 1] + (p[i - 1] === tc ? 0 : 1));
+      if (cur[m] < best) { best = cur[m]; end = j; }
+      [prev, cur] = [cur, prev];
+    }
+    return { d: best, end };
+  }
+
+  // 한국어 가사를 영어 알파벳 발음으로 적은 것 (modudeul miwohaneura…) → 한글로 쳐서는 못 맞힘
+  const ROMAJA = /\b(neol|naega|nega|neoui|neon|neowa|neoreul|uri|urin|urineun|saranghae|sarang|geu|geuge|geureon|jigeum|ije|hamkke|maeum|gateun|dasi|eotteoke|hajiman|mwo|jeongmal|nareul|naneun|naui|modu|gachi|haru|eodiseo|eonjena|kkeut|kkum|nunmul|baby\s+nan)\b/gi;
+  function isRomanized(lines) {
+    const text = lines.join(' ');
+    if (hasHangul(text)) return false;
+    const hits = text.match(ROMAJA) || [];
+    return hits.length >= 6 && new Set(hits.map((h) => h.toLowerCase())).size >= 3;
+  }
+  // 추임새만 있는 줄 (oh yeah na na) 은 힌트로 안 씀
+  const FILLER = /^(oh+|ooh+|ah+|uh+|eh+|ay+|yeah|yea|na|la|da|hey|ho|woo+|whoa|baby|uh-huh|mm+|hmm+|yo)$/i;
+  const meaningfulWords = (l) => l.split(/[\s,.!?~-]+/).filter((w) => w && !FILLER.test(w)).length;
+
+  // LRCLIB 가사 → 채점용 데이터. 못 쓰는 가사면 null
+  function buildSing(plain, song) {
+    const lines = lyricLines(plain);
+    if (lines.length < 6 || isRomanized(lines)) return null;
+    const titles = songAnswers(song).filter((a) => a.length >= 2).sort((a, b) => b.length - a.length);
+    // 줄을 이어 붙인 전체 가사 (줄바꿈 걸쳐 적어도 OK). 괄호 속 추임새 "(oh yeah)" 를 뺀 버전도 같이
+    const texts = [lines, lines.map((l) => l.replace(/\([^)]*\)/g, ' '))].map((ls) => {
+      let text = '';
+      const starts = ls.map((l) => { const s = text.length; text += norm(l); return s; });
+      return { text, starts };
+    });
+    // 힌트·정답 공개용 소절: 가장 많이 반복되는 줄 (후렴), 한글 가사면 한글 줄 우선
+    const count = new Map();
+    lines.forEach((l) => { const k = norm(l); count.set(k, (count.get(k) || 0) + 1); });
+    const preferHangul = lines.some((l) => hasHangul(l));
+    const clean = (l) => l.replace(/\s*\([^)]*\)\s*/g, ' ').trim(); // 추임새 괄호는 빼고 보여줌
+    const good = lines.filter((l) => {
+      const c = clean(l);
+      return c.length <= 60 && singEnough(norm(c), titles) && (!preferHangul || hasHangul(c)) && (hasHangul(c) || meaningfulWords(c) >= 3);
+    });
+    if (!good.length) return null;
+    const top = Math.max(...good.map((l) => count.get(norm(l))));
+    const hook = clean(pick(good.filter((l) => count.get(norm(l)) === top)));
+    return { lines, texts, titles, hook };
+  }
+
+  // 노래 부르기 채점 → { ok, close, why: 'short'|'title', lines: 맞힌 소절, next: 다음 소절 }
+  function singCheck(text, q) {
+    const sg = q.sing;
+    const n = norm(text).slice(0, 150);
+    if (!n || !sg) return { ok: false, close: false };
+    const enough = singEnough(n, sg.titles);
+    const hits = sg.texts.map((v) => Object.assign(fuzzyFind(n, v.text), { v }));
+    const best = hits.reduce((a, b) => (b.d < a.d ? b : a));
+    if (!enough) {
+      if (best.d > 0) return { ok: false, close: false }; // 그냥 잡담
+      // 가사에 있는 말이긴 한데 너무 짧거나 제목만 침
+      return { ok: false, close: false, why: withoutTitle(n, sg.titles).length < n.length ? 'title' : 'short' };
+    }
+    const allowed = Math.floor(n.length / 8); // 8글자마다 오타 1개 허용
+    if (best.d > allowed) return { ok: false, close: best.d <= allowed + Math.max(1, Math.floor(n.length / 5)) };
+    // 맞힌 위치 → 원래 가사 줄 (최대 3줄) + 다음 줄
+    const lineAt = (pos) => { let i = 0; while (i + 1 < best.v.starts.length && best.v.starts[i + 1] <= pos) i++; return i; };
+    const a = lineAt(Math.max(0, best.end - n.length)), b = Math.min(lineAt(best.end - 1), a + 2);
+    return { ok: true, close: false, lines: sg.lines.slice(a, b + 1), next: sg.lines[b + 1] || null };
+  }
+
+  // 힌트용 가리기: 앞쪽 ratio 만큼 단어는 보여주고, 나머지는 한글 초성 / 영어 첫 글자만
+  function singMask(line, ratio) {
+    const words = line.split(/\s+/);
+    const show = Math.ceil(words.length * (ratio || 0));
+    return words.map((w, i) => (i < show ? w : [...w].map((c, k) => {
+      if (isHangul(c)) return choOf(c);
+      if (/[A-Za-z]/.test(c)) return k === 0 || !/[A-Za-z]/.test(w[k - 1]) ? c : '_';
+      return c;
+    }).join(''))).join(' ');
+  }
+
   // 검색 결과 중 이 노래가 맞는 것 고르기 (제목·가수 일치, 한글 가사 우선)
   function chooseLyrics(results, song, db) {
     if (!Array.isArray(results)) return null;
@@ -319,15 +449,20 @@
   // 다음 문제 준비. o = { mode, takeSong(), getLyrics(song) }
   async function prepareQuestion(o) {
     const mode = o.mode === '랜덤' ? pick(['가사', '초성', '가수']) : o.mode;
-    if (mode !== '가사') { const s = o.takeSong(); return s ? { q: s, mode } : null; }
+    if (mode !== '가사' && mode !== '부르기') { const s = o.takeSong(); return s ? { q: s, mode } : null; }
     let netErr = 0;
     for (let i = 0; i < 8; i++) {
       const s = o.takeSong();
       if (!s) return null;
-      if (s.lyric) return { q: s, mode: '가사' }; // 직접 추가한 가사 문제
+      if (s.lyric) { if (mode === '가사') return { q: s, mode: '가사' }; continue; } // 직접 추가한 가사 문제
       let plain = null;
       try { plain = await o.getLyrics(s); } catch (e) {
         if (++netErr >= 2) return { q: s, mode: '초성', fallback: 'offline' };
+        continue;
+      }
+      if (mode === '부르기') {
+        const sing = plain && buildSing(plain, s);
+        if (sing) return { q: Object.assign({}, s, { sing, src: 'LRCLIB' }), mode: '부르기' };
         continue;
       }
       const snip = plain && pickSnippet(plain, s);
@@ -433,7 +568,7 @@
       ['/패스', '이번 문제 넘기기'],
       [multi ? '/순위' : '/점수', multi ? '현재 순위 보기' : '현재 점수 보기'],
       ['/종료', '게임 끝내기'],
-      ['/모드 이름', multi ? '초성 · 가수 · 가사 · 랜덤 · 얼굴 · 자켓 · 릴레이' : '초성 · 가수 · 가사 · 랜덤 · 얼굴 · 자켓'],
+      ['/모드 이름', multi ? '초성 · 가수 · 가사 · 랜덤 · 부르기 · 얼굴 · 자켓 · 릴레이' : '초성 · 가수 · 가사 · 랜덤 · 부르기 · 얼굴 · 자켓'],
       ['/연대 값', '90 · 00 · 10 · 20 · 전체'],
       ['/가수 이름', '특정 가수만 (비우면 해제)'],
       ['/시간 초', '제한시간 (0 = 무제한)'],
@@ -460,8 +595,9 @@
     CHO, isHangul, choOf, esc, norm, pick, shuffle, lev, choMask, artistMask,
     eraKey, ERA_LABEL, eraLabel, MODES, MODE_LABEL, IMAGE_MODES, parseMode, parseEra,
     buildDB, filterPool, buildIdols, buildCovers, poolFor, imageFile, BLUR, imageStage, artistAnswers, findArtist, songAnswers, normalizeCustom, parseCustomArg,
-    titleKind, checkAnswer, questionHTML, hintText, card, points, grade, helpHTML, statsHTML,
+    titleKind, checkAnswer, questionHTML, hintText, card, revealCard, missText, points, grade, helpHTML, statsHTML,
     lyricLines, maskTitle, pickSnippet, chooseLyrics, makeLyricsFetcher, prepareQuestion,
+    SING_HELP, buildSing, singCheck, singMask, fuzzyFind,
     titleVariants, buildDiscography, relayCheck, makeDiscographyFetcher,
   };
 });

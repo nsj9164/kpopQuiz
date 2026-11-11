@@ -169,10 +169,11 @@ class Room {
     if (!isSlash && g && g.r && !g.locked && g.r.turn === p.id && !NOSLASH.has(cmd)) return this.relayAnswer(p, text);
     if (!isSlash && g && g.q && !g.locked) {
       const r = Q.checkAnswer(text, g.q, g.qMode, db.aliases);
-      if (r.ok) { this.chat(p, text, 'ok'); return this.correct(p); }
+      if (r.ok) { this.chat(p, text, 'ok'); return this.correct(p, r); }
       if (!NOSLASH.has(cmd)) {
         this.chat(p, text, 'wrong');
-        if (r.close) this.bot(`🤏 ${esc(p.name)}님 아까워요! 거의 맞았어요`);
+        const miss = Q.missText(r, g.qMode, p.name);
+        if (miss) this.bot(miss);
         return;
       }
     }
@@ -324,7 +325,7 @@ class Room {
     this.bot(`💡 ${auto ? '자동 ' : ''}힌트 ${g.hints}/3<br>${Q.hintText(g.q, g.qMode, g.hints, db.byArtist)}`);
   }
 
-  correct(p) {
+  correct(p, r) {
     const g = this.g;
     g.locked = true;
     this.stopTimer();
@@ -337,7 +338,7 @@ class Room {
     s.score += pts.total;
     s.correct++;
     g.scores.set(p.id, s);
-    this.bot(`🎉 <b>${esc(p.name)}</b>님 정답! +${pts.total}점${pts.bonus ? ` (🔥 ${g.streak}연속 +${pts.bonus})` : ''}${Q.card(g.q)}`);
+    this.bot(`🎉 <b>${esc(p.name)}</b>님 정답! +${pts.total}점${pts.bonus ? ` (🔥 ${g.streak}연속 +${pts.bonus})` : ''}${Q.revealCard(g.q, g.qMode, r)}`);
     this.scheduleNext(2000);
   }
   timeout() {
@@ -348,7 +349,7 @@ class Room {
     g.lastWinner = null;
     g.streak = 0;
     this.reveal();
-    this.bot(`⌛ 시간 초과! 아무도 못 맞혔어요. 정답은…${Q.card(g.q)}`);
+    this.bot(`⌛ 시간 초과! 아무도 못 맞혔어요. 정답은…${Q.revealCard(g.q, g.qMode)}`);
     // 아무도 아무것도 안 치고 3문제 연속 시간 초과 = 다들 자리 비움 → 끝
     if (++g.idle >= 3) { this.bot('😴 3문제 연속으로 아무도 입력이 없어서 게임을 끝낼게요.'); return this.finish(false); }
     this.scheduleNext(2200);
@@ -361,7 +362,7 @@ class Room {
     g.lastWinner = null;
     g.streak = 0;
     this.reveal();
-    this.bot(`⏭ ${esc(p.name)}님이 패스했어요. 정답은…${Q.card(g.q)}`);
+    this.bot(`⏭ ${esc(p.name)}님이 패스했어요. 정답은…${Q.revealCard(g.q, g.qMode)}`);
     this.scheduleNext(2000);
   }
   scheduleNext(ms) {
@@ -383,7 +384,7 @@ class Room {
     const g = this.g;
     this.stopTimer();
     clearTimeout(g.nextT);
-    if (manual && g.q && !g.locked) this.bot(`${p ? esc(p.name) + '님이 게임을 끝냈어요. ' : ''}이번 문제 정답은…${Q.card(g.q)}`);
+    if (manual && g.q && !g.locked) this.bot(`${p ? esc(p.name) + '님이 게임을 끝냈어요. ' : ''}이번 문제 정답은…${Q.revealCard(g.q, g.qMode)}`);
     const top = [...g.scores.values()].sort((a, b) => b.score - a.score)[0];
     if (g.img) this.img({ close: true });
     this.bot(`🏁 <b>게임 종료!</b> (총 ${g.qNo}${g.mode === '릴레이' ? '라운드' : '문제'})<br><br>${this.ranking()}${top ? `<br><br>👑 오늘의 케이팝 왕: <b>${esc(top.name)}</b>` : ''}<br><br>다시 하려면 <code>/시작</code>`);
@@ -732,11 +733,12 @@ class Room {
   }
   setMode(arg) {
     const key = Q.parseMode(arg);
-    if (key === null) return this.bot(`현재 모드: <b>${MODE_LABEL[this.set.mode]}</b><br><code>/모드 초성</code> · <code>/모드 가수</code> · <code>/모드 가사</code> · <code>/모드 랜덤</code> · <code>/모드 릴레이</code><br><code>/모드 얼굴</code> 사진 보고 아이돌 이름 · <code>/모드 자켓</code> 앨범 자켓 보고 타이틀곡`);
-    if (!key) return this.bot('모드는 <b>초성 · 가수 · 가사 · 랜덤 · 얼굴 · 자켓 · 릴레이</b> 중에서 골라주세요.');
+    if (key === null) return this.bot(`현재 모드: <b>${MODE_LABEL[this.set.mode]}</b><br><code>/모드 초성</code> · <code>/모드 가수</code> · <code>/모드 가사</code> · <code>/모드 랜덤</code> · <code>/모드 릴레이</code><br><code>/모드 부르기</code> 제목 보고 가사 한 소절 적기<br><code>/모드 얼굴</code> 사진 보고 아이돌 이름 · <code>/모드 자켓</code> 앨범 자켓 보고 타이틀곡`);
+    if (!key) return this.bot('모드는 <b>초성 · 가수 · 가사 · 랜덤 · 부르기 · 얼굴 · 자켓 · 릴레이</b> 중에서 골라주세요.');
     if (this.guard('모드')) return;
     this.set.mode = key;
     const extra = key === '가사' ? '<br>가사는 LRCLIB에서 불러와요'
+      : key === '부르기' ? `<br>🎙 ${Q.SING_HELP}<br>제일 먼저 맞는 가사를 적은 사람이 점수! 가사는 LRCLIB에서 불러와요`
       : key === '얼굴' ? `<br>📸 각자 에디터에 사진이 흐릿하게 열리고 점점 선명해져요. 빨리 맞힐수록 점수 ↑ (${idols.length}명)<br>이름은 예명·본명·영어 다 OK · 사진: 위키미디어 공용`
       : key === '자켓' ? `<br>💿 각자 에디터에 앨범 자켓이 흐릿하게 열리고 점점 선명해져요. 그 앨범 타이틀곡 제목을 맞히면 정답 (${covers.length}장)`
       : key === '릴레이' ? `<br>가수 이름이 나오면 돌아가면서 그 가수 노래를 하나씩 적어요.<br>한 사람 차례: <b>${this.set.turnTime ? this.set.turnTime + '초' : '무제한'}</b> (<code>/시간</code> 으로 변경) · <code>/시작</code> = 무제한 (<code>/종료</code> 로 끝), <code>/시작 3</code> = 3라운드`
