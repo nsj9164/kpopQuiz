@@ -73,6 +73,7 @@
         name = ev.name;
         store.set('name', name);
         C.clear();
+        if (window.VS && window.VS.image) window.VS.image({ close: true }); // 진행 중인 사진은 바로 뒤에 다시 옴
         ev.history.forEach(render);
         C.sys(`<b>${Q.esc(name)}</b>(으)로 접속했어요 · 방: ${Q.esc(ev.room)}`);
         break;
@@ -80,6 +81,7 @@
       case 'timer': C.setTimer(ev.remain == null ? '' : `⏱ ${ev.remain}s`, ev.remain != null && ev.remain <= 10); break;
       case 'players': C.setSub(null, `👥 ${ev.list.length}명`, ev.list.map((p) => p.name).join(', ')); break;
       case 'name': name = ev.name; store.set('name', name); break;
+      case 'img': if (window.VS && window.VS.image) window.VS.image(ev); break; // 얼굴·자켓 퀴즈 사진
     }
   }
 

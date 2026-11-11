@@ -225,3 +225,12 @@ svg { display: block; }
 #chat.kakao .sys { background: rgba(0,0,0,.14); color: #fff; }
 #chat.kakao .bubble code, #chat.kakao .bubble kbd { background: #eee; color: #a0522d; }
 #chat.kakao .msg .avatar { background: #fff; color: #4a6b8a; }
+
+/* 이미지 미리보기 탭 (얼굴·자켓 퀴즈) */
+#imgview { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: var(--ed); overflow: hidden; }
+#imgview[hidden] { display: none; }
+#imgview .iv-box { max-width: calc(100% - 48px); max-height: calc(100% - 64px); overflow: hidden; line-height: 0; box-shadow: 0 0 0 1px rgba(128,128,128,.25); }
+#imgview img { display: block; max-width: 100%; height: min(440px, calc(100vh - 240px)); width: auto; object-fit: contain; transition: filter .8s ease; transform: scale(1.04); }
+#imgview .iv-msg { position: absolute; top: 50%; left: 0; right: 0; text-align: center; color: var(--dim); font-size: 13px; }
+#imgview .iv-msg:empty { display: none; }
+#imgview .iv-credit { position: absolute; bottom: 8px; right: 14px; color: var(--dim); font-size: 11px; opacity: .8; max-width: 80%; text-align: right; }

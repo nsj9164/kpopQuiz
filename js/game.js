@@ -15,6 +15,9 @@
 
   const db = Q.buildDB([...window.SONGS, ...(window.SONGS_EXTRA || [])], window.ARTIST_ALIASES, window.ARTIST_EN);
   const customList = () => Q.normalizeCustom([...(Array.isArray(window.CUSTOM_QUESTIONS) ? window.CUSTOM_QUESTIONS : []), ...store.get('custom', [])]);
+  const idols = Q.buildIdols(window.IDOLS);           // 얼굴 퀴즈 (위키미디어 공용 사진)
+  const covers = Q.buildCovers(db, window.COVERS);    // 자켓 퀴즈 (iTunes 앨범 아트)
+  const VSimg = (ev) => { if (window.VS && window.VS.image) window.VS.image(ev); };
 
   // LRCLIB 에서 가사 불러오기 (7초 넘으면 포기)
   function fetchJSON(url) {
@@ -37,7 +40,9 @@
     correct: 0, score: 0, streak: 0, bestStreak: 0, hints: 0,
     locked: true, timer: null, remain: 0, paused: false, nextT: null,
     runId: 0, prep: null, warnedOffline: false,
+    stage: 0, imgErrors: 0, // 사진 문제: 흐림 단계, 연속으로 사진을 못 불러온 횟수
   };
+  const isImage = () => Q.IMAGE_MODES.has(S.qMode);
 
   // ───── 메시지 출력 ─────
   const timeStr = (ts) => new Date(ts || Date.now()).toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' });
@@ -98,6 +103,7 @@
     if (S.paused || S.locked) return;
     S.remain--;
     renderTimer();
+    updateStage();
     if (S.remain === Math.floor(S.timeLimit / 2) && S.hints === 0 && S.timeLimit >= 20) hint(true);
     if (S.remain === 10 && S.timeLimit > 15) say('⏰ <b>10초</b> 남았어요!', 0);
     if (S.remain <= 0) { stopTimer(); timeout(); }
@@ -108,8 +114,14 @@
   function filterLabel() {
     return '연대: ' + ERA_LABEL[S.era] + (S.artist ? ' · 가수: ' + esc(S.artist) : '');
   }
-  // 가사 모드: 수록곡(가사는 LRCLIB 에서) + 직접 추가한 가사 문제
-  const pool = () => (S.mode === '가사' ? [...Q.filterPool(db, S), ...customList()] : Q.filterPool(db, S));
+  // 가사 모드: 수록곡(가사는 LRCLIB 에서) + 직접 추가한 가사 문제 / 얼굴·자켓: 사진 목록
+  const pool = () => Q.poolFor(S.mode, { db, idols, covers, custom: S.mode === '가사' ? customList() : [] }, S);
+  // 사진 흐림: 시간이 지나거나 힌트를 쓸수록 선명해짐
+  function updateStage() {
+    if (!isImage() || S.locked) return;
+    const st = Q.imageStage(S.hints, S.remain, S.timeLimit);
+    if (st !== S.stage) { S.stage = st; VSimg({ blur: Q.BLUR[st] }); }
+  }
   function takeSong() {
     if (!S.deck.length) S.deck = shuffle(pool().slice());
     return S.deck.pop() || null;
@@ -126,8 +138,10 @@
     S.runId++;
     Object.assign(S, { running: true, limit: n, deck: shuffle(p.slice()), qNo: 0, correct: 0, score: 0, streak: 0, bestStreak: 0, q: null, locked: true, prep: null });
     S.prep = prepare(); // 첫 문제 가사 미리 불러오기
+    preload(S.prep);
+    VSimg({ close: true });
     say(`🎮 <b>게임 시작!</b><br>모드: <b>${modeLabel()}</b><br>문제 수: <b>${n ? n + '문제' : '무한'}</b> · 제한시간: <b>${S.timeLimit ? S.timeLimit + '초' : '없음'}</b>` +
-      `${filterLabel() ? '<br>' + filterLabel() : ''} <span style="opacity:.7">(${p.length}곡 중 출제)</span>`);
+      `${filterLabel() ? '<br>' + filterLabel() : ''} <span style="opacity:.7">(${p.length}${S.mode === '얼굴' ? '명' : S.mode === '자켓' ? '장' : '곡'} 중 출제)</span>`);
     S.nextT = setTimeout(next, 900);
   }
 
@@ -151,19 +165,24 @@
       say('가사를 찾지 못한 곡이라 이번 문제는 초성 퀴즈로 낼게요.', 0);
     }
     const q = item.q;
-    Object.assign(S, { q, qMode: item.mode, hints: 0, locked: true });
+    Object.assign(S, { q, qMode: item.mode, hints: 0, locked: true, stage: 0 });
     S.qNo++;
     const no = `문제 ${S.qNo}${S.limit ? ' / ' + S.limit : ''}`;
-    say(Q.questionHTML(q, S.qMode, no), 250).then(() => {
-      if (S.running && S.q === q) { S.locked = false; startTimer(); }
+    const qNo = S.qNo;
+    say(Q.questionHTML(q, S.qMode, no, qNo), 250).then(() => {
+      if (!S.running || S.q !== q) return;
+      if (isImage()) VSimg({ file: Q.imageFile(qNo), src: q.img, blur: Q.BLUR[0], credit: q.credit });
+      S.locked = false;
+      startTimer();
     });
-    if (!S.limit || S.qNo < S.limit) S.prep = prepare(); // 다음 문제 미리 준비
+    if (!S.limit || S.qNo < S.limit) preload(S.prep = prepare()); // 다음 문제 미리 준비
   }
 
   function hint(auto) {
     if (!S.running || !S.q || S.locked) { if (!auto) say('지금은 풀고 있는 문제가 없어요. <code>/시작</code> 으로 시작!'); return; }
     if (S.hints >= 3) return say('힌트를 모두 썼어요 🙅 모르겠으면 <code>/패스</code>');
     S.hints++;
+    updateStage();
     say(`💡 ${auto ? '자동 ' : ''}힌트 ${S.hints}/3<br>${Q.hintText(S.q, S.qMode, S.hints, db.byArtist)}`, auto ? 0 : 250);
   }
 
@@ -173,7 +192,8 @@
     S.correct++;
     S.streak++;
     S.bestStreak = Math.max(S.bestStreak, S.streak);
-    const pts = Q.points(S.hints, S.streak);
+    const pts = Q.points(isImage() ? S.stage : S.hints, S.streak);
+    reveal();
     S.score += pts.total;
     store.set('lifetime', store.get('lifetime', 0) + 1);
     const cheers = ['🎉 정답!', '👏 정답이에요!', '✨ 딩동댕!', '💯 정답!', '🔥 맞았어요!'];
@@ -184,6 +204,7 @@
     if (!S.running || S.locked) return;
     S.locked = true;
     S.streak = 0;
+    reveal();
     say(`⌛ 시간 초과! 정답은…${Q.card(S.q)}`, 0);
     scheduleNext(2000);
   }
@@ -192,9 +213,32 @@
     S.locked = true;
     stopTimer();
     S.streak = 0;
+    reveal();
     say(`⏭ 패스! 정답은…${Q.card(S.q)}`, 200);
     scheduleNext(1800);
   }
+  function reveal() {
+    if (!isImage()) return;
+    S.imgErrors = 0;
+    VSimg({ reveal: true, credit: S.q && S.q.credit });
+  }
+  // 다음 사진 미리 받아두기
+  function preload(p) {
+    if (p && p.then) p.then((it) => { if (it && it.q && it.q.img) VSimg({ preload: it.q.img }); }, () => {});
+  }
+  // 사진을 못 불러오면 그 문제는 건너뜀 (3번 연속이면 끝)
+  window.addEventListener('imageerror', (e) => {
+    if (!S.running || !isImage() || S.locked || !S.q || S.q.img !== e.detail) return;
+    S.locked = true;
+    stopTimer();
+    if (++S.imgErrors >= 3) {
+      say('⚠ 사진 서버에 연결이 안 돼요. 인터넷 연결을 확인해주세요.', 0);
+      return finish(false);
+    }
+    say('⚠ 사진을 못 불러와서 다음 문제로 넘어갈게요.', 0);
+    S.qNo--;
+    scheduleNext(800);
+  });
   function scheduleNext(ms) { clearTimeout(S.nextT); S.nextT = setTimeout(next, ms); }
 
   function finish(manual) {
@@ -205,6 +249,7 @@
     S.running = false;
     S.runId++;
     S.prep = null;
+    VSimg({ close: true });
     S.q = null;
     S.locked = true;
     renderTimer();
@@ -367,13 +412,16 @@
   }
   function setMode(arg) {
     const key = Q.parseMode(arg);
-    if (key === null) return say(`현재 모드: <b>${modeLabel()}</b><br><code>/모드 초성</code> · <code>/모드 가수</code> · <code>/모드 가사</code> · <code>/모드 랜덤</code>`);
-    if (!key) return say('모드는 <b>초성 · 가수 · 가사 · 랜덤</b> 중에서 골라주세요.');
+    if (key === null) return say(`현재 모드: <b>${modeLabel()}</b><br><code>/모드 초성</code> · <code>/모드 가수</code> · <code>/모드 가사</code> · <code>/모드 랜덤</code><br><code>/모드 얼굴</code> 사진 보고 아이돌 이름 · <code>/모드 자켓</code> 앨범 자켓 보고 타이틀곡`);
+    if (!key) return say('모드는 <b>초성 · 가수 · 가사 · 랜덤 · 얼굴 · 자켓</b> 중에서 골라주세요.');
     if (key === '릴레이') return say('🎤 노래 릴레이는 친구랑 돌아가면서 하는 <b>멀티 전용</b> 모드예요.<br><b>start.bat</b> 으로 실행해서 멀티 방에서 해주세요.');
     if (guardRunning('모드')) return;
     S.mode = key;
     store.set('mode', key);
-    const extra = key === '가사' ? '<br>가사는 LRCLIB에서 불러와요 (인터넷 연결 필요)' : '';
+    const extra = key === '가사' ? '<br>가사는 LRCLIB에서 불러와요 (인터넷 연결 필요)'
+      : key === '얼굴' ? `<br>📸 에디터에 사진이 흐릿하게 열리고 점점 선명해져요. 빨리 맞힐수록 점수 ↑ (${idols.length}명)<br>이름은 예명·본명·영어 다 OK · 사진: 위키미디어 공용`
+      : key === '자켓' ? `<br>💿 에디터에 앨범 자켓이 흐릿하게 열리고 점점 선명해져요. 그 앨범 타이틀곡 제목을 맞히면 정답 (${covers.length}장)`
+      : '';
     say(`✅ 모드 변경: <b>${modeLabel()}</b>${extra}`);
   }
   function setEra(arg) {
@@ -478,7 +526,7 @@
       case '내문제': case '목록': return listCustom();
       case '내문제삭제': case '삭제': return delCustom(arg);
       case '기록': case '랭킹': return record();
-      case '통계': case '곡수': return say(Q.statsHTML(db, customList().length));
+      case '통계': case '곡수': return say(Q.statsHTML(db, customList().length, idols.length, covers.length));
       default: return say(`모르는 명령어예요: <code>/${esc(cmd)}</code> · <code>/도움말</code> 참고`);
     }
   }
@@ -562,6 +610,7 @@
       clearTimeout(S.nextT);
       S.runId++;
       Object.assign(S, { running: false, q: null, locked: true, prep: null });
+      VSimg({ close: true });
       wcStopTimer();
       Object.assign(W, { running: false, locked: true, runId: W.runId + 1 });
       setTimerText('');

@@ -42,6 +42,8 @@ async function fetchJSON(url) {
   }
 }
 const getLyrics = Q.makeLyricsFetcher(fetchJSON, db);
+const idols = Q.buildIdols(loadWindowScript('js/idols.js').IDOLS);           // 얼굴 퀴즈 (tools/build-idols.js)
+const covers = Q.buildCovers(db, loadWindowScript('js/covers.js').COVERS);   // 자켓 퀴즈 (tools/build-covers.js)
 
 // 끝말잇기 사전 (표준국어대사전 명사)
 const WC = require('./js/wordchain-core.js');
@@ -121,6 +123,7 @@ class Room {
     this.send(res, { t: 'hello', you: p.pub, name: p.name, room: this.name, history: this.history });
     const g = this.g, w = this.wc;
     this.send(res, { t: 'timer', remain: g && !g.locked && g.tl ? g.remain : w && !w.locked && w.time ? w.remain : null });
+    if (g && g.img) this.send(res, Object.assign({ t: 'img' }, g.img));
     if (!this.history.length) {
       this.bot(`안녕하세요! 🎵 <b>K-POP 노래 맞추기</b> 멀티 방이에요.<br>아이돌 노래 <b>${db.songs.length}곡</b> (${db.minYear}~${db.maxYear}) 중에서 문제가 나와요.<br>제일 먼저 맞힌 사람이 점수를 가져가요!<br><br>▶ <code>/시작</code> 게임 시작 · 📖 <code>/도움말</code> 명령어`);
     }
@@ -196,7 +199,7 @@ class Room {
       case '추가': case 'add': return this.addCustom(p, arg);
       case '내문제': case '목록': return this.listCustom();
       case '내문제삭제': case '삭제': return this.delCustom(arg);
-      case '통계': case '곡수': return this.bot(Q.statsHTML(db, customList().length));
+      case '통계': case '곡수': return this.bot(Q.statsHTML(db, customList().length, idols.length, covers.length));
       case '누구': case '접속자': case '멤버': return this.bot(`👥 접속 중 (${this.online().length}명)<br>${this.online().map((x) => esc(x.name)).join(', ')}`);
       case '닉네임': case '이름': return this.rename(p, arg);
       case '기록': case '랭킹': return this.bot('멀티에서는 게임이 끝날 때 순위가 나와요. 진행 중이면 <code>/순위</code>');
@@ -207,7 +210,28 @@ class Room {
 
   // ───── 게임 ─────
   // 가사 모드: 수록곡(가사는 LRCLIB 에서) + 직접 추가한 가사 문제
-  pool() { return this.set.mode === '가사' ? [...Q.filterPool(db, this.set), ...customList()] : Q.filterPool(db, this.set); }
+  pool() { return Q.poolFor(this.set.mode, { db, idols, covers, custom: this.set.mode === '가사' ? customList() : [] }, this.set); }
+  // 사진 문제 (얼굴·자켓): 에디터 이미지 탭으로 보내기. g.img = 지금 상태 (늦게 들어온 사람한테도 보냄)
+  img(ev) {
+    const g = this.g;
+    if (ev.close) { if (g) g.img = null; return this.broadcast({ t: 'img', close: true }); }
+    if (!g || (!ev.src && !g.img)) return;
+    g.img = ev.src ? Object.assign({}, ev) : Object.assign(g.img, ev);
+    this.broadcast(Object.assign({ t: 'img' }, ev));
+  }
+  isImage() { return !!this.g && Q.IMAGE_MODES.has(this.g.qMode); }
+  updateStage() {
+    const g = this.g;
+    if (!this.isImage() || g.locked) return;
+    const st = Q.imageStage(g.hints, g.remain, g.tl);
+    if (st !== g.stage) { g.stage = st; this.img({ blur: Q.BLUR[st] }); }
+  }
+  reveal() {
+    if (this.isImage() && this.g.img) this.img({ reveal: true, blur: 0, credit: this.g.q.credit });
+  }
+  preload(g) {
+    if (g.prep) g.prep.then((it) => { if (this.g === g && it && it.q && it.q.img) this.broadcast({ t: 'img', preload: it.q.img }); }, () => {});
+  }
   prepare(g) {
     return Q.prepareQuestion({
       mode: g.mode,
@@ -227,8 +251,10 @@ class Room {
     if (!pool.length) return this.bot('조건에 맞는 노래가 없어요. <code>/연대 전체</code> 또는 <code>/가수</code> 로 필터를 풀어보세요.');
     const g = this.g = { mode: this.set.mode, limit: n, deck: shuffle(pool.slice()), q: null, qMode: null, qNo: 0, hints: 0, locked: true, remain: 0, tl: 0, timer: null, nextT: null, scores: new Map(), lastWinner: null, streak: 0, prep: null, warnedOffline: false };
     g.prep = this.prepare(g); // 첫 문제 가사 미리 불러오기
+    this.preload(g);
+    this.img({ close: true });
     const filter = `<br>연대: ${ERA_LABEL[this.set.era]}${this.set.artist ? ' · 가수: ' + esc(this.set.artist) : ''}`;
-    this.bot(`🎮 <b>${esc(p.name)}</b>님이 게임을 시작했어요!<br>모드: <b>${MODE_LABEL[this.set.mode]}</b><br>문제 수: <b>${n ? n + '문제' : '무한'}</b> · 제한시간: <b>${this.set.time ? this.set.time + '초' : '없음'}</b>${filter} <span style="opacity:.7">(${pool.length}곡 중 출제)</span>`);
+    this.bot(`🎮 <b>${esc(p.name)}</b>님이 게임을 시작했어요!<br>모드: <b>${MODE_LABEL[this.set.mode]}</b><br>문제 수: <b>${n ? n + '문제' : '무한'}</b> · 제한시간: <b>${this.set.time ? this.set.time + '초' : '없음'}</b>${filter} <span style="opacity:.7">(${pool.length}${this.set.mode === '얼굴' ? '명' : this.set.mode === '자켓' ? '장' : '곡'} 중 출제)</span>`);
     g.nextT = setTimeout(() => this.next(), 1500);
   }
 
@@ -256,10 +282,12 @@ class Room {
     g.qMode = item.mode;
     g.qNo++;
     g.hints = 0;
-    this.bot(Q.questionHTML(g.q, g.qMode, `문제 ${g.qNo}${g.limit ? ' / ' + g.limit : ''}`));
+    g.stage = 0;
+    this.bot(Q.questionHTML(g.q, g.qMode, `문제 ${g.qNo}${g.limit ? ' / ' + g.limit : ''}`, g.qNo));
+    if (this.isImage()) this.img({ file: Q.imageFile(g.qNo), src: g.q.img, blur: Q.BLUR[0], credit: g.q.credit });
     g.locked = false;
     this.startTimer();
-    if (!g.limit || g.qNo < g.limit) g.prep = this.prepare(g); // 다음 문제 미리 준비
+    if (!g.limit || g.qNo < g.limit) { g.prep = this.prepare(g); this.preload(g); } // 다음 문제 미리 준비
   }
 
   startTimer() {
@@ -280,6 +308,7 @@ class Room {
     if (!g || g.locked) return;
     g.remain--;
     this.timer(g.remain);
+    this.updateStage();
     if (g.remain === Math.floor(g.tl / 2) && g.hints === 0 && g.tl >= 20) this.hint(true);
     if (g.remain === 10 && g.tl > 15) this.bot('⏰ <b>10초</b> 남았어요!');
     if (g.remain <= 0) this.timeout();
@@ -290,6 +319,7 @@ class Room {
     if (!g || !g.q || g.locked) { if (!auto) this.bot('지금은 풀고 있는 문제가 없어요. <code>/시작</code> 으로 시작!'); return; }
     if (g.hints >= 3) return this.bot('힌트를 모두 썼어요 🙅 모르겠으면 <code>/패스</code>');
     g.hints++;
+    this.updateStage();
     this.bot(`💡 ${auto ? '자동 ' : ''}힌트 ${g.hints}/3<br>${Q.hintText(g.q, g.qMode, g.hints, db.byArtist)}`);
   }
 
@@ -299,7 +329,8 @@ class Room {
     this.stopTimer();
     g.streak = g.lastWinner === p.id ? g.streak + 1 : 1;
     g.lastWinner = p.id;
-    const pts = Q.points(g.hints, g.streak);
+    const pts = Q.points(this.isImage() ? g.stage : g.hints, g.streak);
+    this.reveal();
     const s = g.scores.get(p.id) || { name: p.name, score: 0, correct: 0 };
     s.name = p.name;
     s.score += pts.total;
@@ -315,6 +346,7 @@ class Room {
     this.stopTimer();
     g.lastWinner = null;
     g.streak = 0;
+    this.reveal();
     this.bot(`⌛ 시간 초과! 아무도 못 맞혔어요. 정답은…${Q.card(g.q)}`);
     this.scheduleNext(2200);
   }
@@ -325,6 +357,7 @@ class Room {
     this.stopTimer();
     g.lastWinner = null;
     g.streak = 0;
+    this.reveal();
     this.bot(`⏭ ${esc(p.name)}님이 패스했어요. 정답은…${Q.card(g.q)}`);
     this.scheduleNext(2000);
   }
@@ -349,6 +382,7 @@ class Room {
     clearTimeout(g.nextT);
     if (manual && g.q && !g.locked) this.bot(`${p ? esc(p.name) + '님이 게임을 끝냈어요. ' : ''}이번 문제 정답은…${Q.card(g.q)}`);
     const top = [...g.scores.values()].sort((a, b) => b.score - a.score)[0];
+    if (g.img) this.img({ close: true });
     this.bot(`🏁 <b>게임 종료!</b> (총 ${g.qNo}${g.mode === '릴레이' ? '라운드' : '문제'})<br><br>${this.ranking()}${top ? `<br><br>👑 오늘의 케이팝 왕: <b>${esc(top.name)}</b>` : ''}<br><br>다시 하려면 <code>/시작</code>`);
     this.g = null;
   }
@@ -358,6 +392,7 @@ class Room {
     clearInterval(this.g.timer);
     clearTimeout(this.g.nextT);
     this.g = null;
+    this.broadcast({ t: 'img', close: true });
   }
 
   // ───── 끝말잇기 ─────
@@ -692,11 +727,13 @@ class Room {
   }
   setMode(arg) {
     const key = Q.parseMode(arg);
-    if (key === null) return this.bot(`현재 모드: <b>${MODE_LABEL[this.set.mode]}</b><br><code>/모드 초성</code> · <code>/모드 가수</code> · <code>/모드 가사</code> · <code>/모드 랜덤</code> · <code>/모드 릴레이</code>`);
-    if (!key) return this.bot('모드는 <b>초성 · 가수 · 가사 · 랜덤 · 릴레이</b> 중에서 골라주세요.');
+    if (key === null) return this.bot(`현재 모드: <b>${MODE_LABEL[this.set.mode]}</b><br><code>/모드 초성</code> · <code>/모드 가수</code> · <code>/모드 가사</code> · <code>/모드 랜덤</code> · <code>/모드 릴레이</code><br><code>/모드 얼굴</code> 사진 보고 아이돌 이름 · <code>/모드 자켓</code> 앨범 자켓 보고 타이틀곡`);
+    if (!key) return this.bot('모드는 <b>초성 · 가수 · 가사 · 랜덤 · 얼굴 · 자켓 · 릴레이</b> 중에서 골라주세요.');
     if (this.guard('모드')) return;
     this.set.mode = key;
     const extra = key === '가사' ? '<br>가사는 LRCLIB에서 불러와요'
+      : key === '얼굴' ? `<br>📸 각자 에디터에 사진이 흐릿하게 열리고 점점 선명해져요. 빨리 맞힐수록 점수 ↑ (${idols.length}명)<br>이름은 예명·본명·영어 다 OK · 사진: 위키미디어 공용`
+      : key === '자켓' ? `<br>💿 각자 에디터에 앨범 자켓이 흐릿하게 열리고 점점 선명해져요. 그 앨범 타이틀곡 제목을 맞히면 정답 (${covers.length}장)`
       : key === '릴레이' ? `<br>가수 이름이 나오면 돌아가면서 그 가수 노래를 하나씩 적어요.<br>한 사람 차례: <b>${this.set.turnTime ? this.set.turnTime + '초' : '무제한'}</b> (<code>/시간</code> 으로 변경) · <code>/시작 3</code> = 3라운드`
       : '';
     this.bot(`✅ 모드 변경: <b>${MODE_LABEL[key]}</b>${extra}`);
@@ -763,7 +800,7 @@ class Room {
 }
 
 // ───── HTTP ─────
-const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.ico': 'image/x-icon' };
+const TYPES = { '.html': 'text/html; charset=utf-8', '.js': 'application/javascript; charset=utf-8', '.css': 'text/css; charset=utf-8', '.json': 'application/json; charset=utf-8', '.svg': 'image/svg+xml', '.png': 'image/png', '.jpg': 'image/jpeg', '.ico': 'image/x-icon' };
 
 function serveStatic(res, pathname) {
   if (pathname === '/') pathname = '/index.html';

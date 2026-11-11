@@ -63,6 +63,7 @@
     if (/\.json$/.test(name)) return '<span class="fi" style="color:#cbcb41">{}</span>';
     if (/\.ya?ml$/.test(name)) return '<span class="fi" style="color:#a074c4">!</span>';
     if (/\.md$/.test(name)) return '<span class="fi" style="color:#519aba">M↓</span>';
+    if (/\.(png|jpe?g)$/.test(name)) return '<span class="fi" style="color:#a074c4">▣</span>';
     if (/^\.env/.test(name)) return '<span class="fi" style="color:#e5c07b">⚙</span>';
     if (/^\.git/.test(name)) return '<span class="fi" style="color:#41535b">◆</span>';
     return '<span class="fi" style="color:#999">≡</span>';
@@ -120,7 +121,8 @@
   });
 
   function openFile(p) {
-    if (!FILES[p]) return;
+    if (!FILES[p] && p !== IMG.path) return;
+    if (p === IMG.path) IMG.hidden = false;
     if (!state.open.includes(p)) state.open.push(p);
     state.active = p;
     p.split('/').slice(0, -1).reduce((acc, part) => { const q = acc ? acc + '/' + part : part; state.expanded.add(q); return q; }, '');
@@ -129,6 +131,7 @@
   function closeFile(p) {
     const i = state.open.indexOf(p);
     if (i < 0) return;
+    if (p === IMG.path) { IMG.path = null; IMG.src = ''; }
     state.open.splice(i, 1);
     if (state.active === p) state.active = state.open[Math.max(0, i - 1)] || null;
     renderAll();
@@ -244,6 +247,10 @@
 
   function renderEditor() {
     const p = state.active;
+    const isImg = !!p && p === IMG.path;
+    elView.hidden = !isImg;
+    elCode.style.visibility = $('#minimap').style.visibility = isImg ? 'hidden' : '';
+    if (isImg) { renderImage(); return; }
     if (!p) { elLines.innerHTML = ''; $('#mm').innerHTML = ''; elCaret.style.display = 'none'; return; }
     const lines = HL[langOf(p)](FILES[p]);
     const cur = state.cursor[p] || (state.cursor[p] = { ln: p.endsWith('orders.service.ts') ? 78 : 1, col: 5 });
@@ -289,12 +296,97 @@
   function renderCrumbs() {
     const p = state.active;
     if (!p) { $('#crumbs').innerHTML = ''; return; }
+    if (!FILES[p]) { $('#crumbs').innerHTML = p.split('/').map(esc).join('<span class="sep">›</span>'); return; }
     const parts = p.split('/');
     const last = parts.pop();
     $('#crumbs').innerHTML = parts.map((x) => `<span>${esc(x)}</span><span class="sep">›</span>`).join('') + `${fileIcon(last)}<span>${esc(last)}</span>` +
       (/\.ts$/.test(last) && FILES[p].includes('class ') ? `<span class="sep">›</span><span style="color:#ee9d28">◈</span><span>${esc((FILES[p].match(/class (\w+)/) || [])[1] || '')}</span>` : '');
   }
+  // ───── 이미지 미리보기 탭 (얼굴·자켓 퀴즈) ─────
+  // prev: 사진 열기 전에 보던 파일, hidden: 채팅 숨길 때 같이 뒤로 보냄
+  const IMG = { path: null, src: '', blur: 0, credit: '', revealed: false, prev: null, hidden: false, size: '' };
+  const elView = document.createElement('div');
+  elView.id = 'imgview';
+  elView.hidden = true;
+  elView.innerHTML = '<div class="iv-box"><img alt=""></div><div class="iv-msg"></div><div class="iv-credit"></div>';
+  $('#editor').appendChild(elView);
+  const elImg = elView.querySelector('img'), elIvMsg = elView.querySelector('.iv-msg');
+  elImg.addEventListener('load', () => {
+    elIvMsg.textContent = '';
+    IMG.size = `${elImg.naturalWidth} x ${elImg.naturalHeight}`;
+    if (state.active === IMG.path) updateStatus();
+  });
+  elImg.addEventListener('error', () => {
+    if (!IMG.src || elImg.getAttribute('src') !== IMG.src) return;
+    elIvMsg.textContent = '이미지를 표시할 수 없습니다. (사진 서버에 연결할 수 없음)';
+    window.dispatchEvent(new CustomEvent('imageerror', { detail: IMG.src }));
+  });
+  function renderImage() {
+    if (elImg.getAttribute('src') !== IMG.src) { elIvMsg.textContent = ''; IMG.size = ''; elImg.src = IMG.src; }
+    elImg.style.filter = IMG.blur ? `blur(${IMG.blur}px)` : '';
+    elView.querySelector('.iv-credit').textContent = IMG.revealed ? IMG.credit : '';
+    updateStatus();
+    document.title = `${IMG.path.split('/').pop()} - order-api - Visual Studio Code`;
+  }
+  const preloaded = [];
+  // ev: { file, src, blur, credit } 새 사진 / { blur } 흐림 변경 / { reveal, credit } 정답 공개 / { close } 닫기 / { preload: 주소 }
+  function image(ev) {
+    if (!ev) return;
+    if (ev.preload) {
+      const im = new Image();
+      im.src = ev.preload;
+      preloaded.push(im);
+      if (preloaded.length > 3) preloaded.shift();
+      return;
+    }
+    if (ev.close) {
+      if (!IMG.path) return;
+      const back = IMG.prev;
+      closeFile(IMG.path);
+      IMG.hidden = false;
+      if (back && state.open.includes(back)) openFile(back);
+      return;
+    }
+    if (ev.src) {
+      const old = IMG.path;
+      if (old && old !== ev.file) { const i = state.open.indexOf(old); if (i >= 0) state.open.splice(i, 1); }
+      if (state.active && FILES[state.active]) IMG.prev = state.active;
+      Object.assign(IMG, { path: ev.file, src: ev.src, blur: ev.blur || 0, credit: ev.credit || '', revealed: !!ev.reveal });
+      if (ev.reveal) IMG.blur = 0;
+      if (!state.open.includes(ev.file)) {
+        const at = state.open.indexOf(state.active);
+        state.open.splice(at < 0 ? state.open.length : at + 1, 0, ev.file);
+      }
+      if (isChatVisible()) { IMG.hidden = false; state.active = ev.file; }
+      else { IMG.hidden = true; if (state.active === old) state.active = IMG.prev; }
+      renderAll();
+      return;
+    }
+    if (!IMG.path) return;
+    if (ev.reveal) { IMG.blur = 0; IMG.revealed = true; if (ev.credit) IMG.credit = ev.credit; }
+    else if (ev.blur != null) IMG.blur = ev.blur;
+    if (state.active === IMG.path) renderImage();
+  }
+  // Esc 로 채팅 숨기면 사진 탭도 뒤로 (누가 지나갈 때)
+  function hideImage(hide) {
+    if (!IMG.path) return;
+    if (hide && state.active === IMG.path) {
+      IMG.hidden = true;
+      state.active = IMG.prev && state.open.includes(IMG.prev) ? IMG.prev : state.open.find((p) => FILES[p]) || null;
+      renderAll();
+    } else if (!hide && IMG.hidden) {
+      IMG.hidden = false;
+      state.active = IMG.path;
+      renderAll();
+    }
+  }
+
   function updateStatus() {
+    if (state.active && state.active === IMG.path) {
+      $('#st-pos').textContent = IMG.size;
+      $('#st-lang').textContent = 'Image Preview';
+      return;
+    }
     const cur = state.cursor[state.active] || { ln: 1, col: 1 };
     $('#st-pos').textContent = `Ln ${cur.ln}, Col ${cur.col}`;
     $('#st-lang').textContent = LANG_NAME[langOf(state.active || '')] || 'Plain Text';
@@ -367,6 +459,7 @@
     elChat.classList.toggle('hidden', !show);
     actChat.classList.toggle('on', show);
     store.set('chatVisible', show);
+    hideImage(!show);
     if (show) {
       unread = 0; badge.textContent = '';
       setTimeout(() => $('#chat-input').focus(), 0);
@@ -426,6 +519,7 @@
   // 게임 쪽에서 쓰는 API
   window.VS = {
     isChatVisible,
+    image,
     setChat,
     notifyChat() {
       if (isChatVisible()) return;

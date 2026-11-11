@@ -56,8 +56,12 @@
   const eraKey = (y) => (y < 2000 ? '90' : y < 2010 ? '00' : y < 2020 ? '10' : '20');
   const ERA_LABEL = { '90': '90년대', '00': '2000년대', '10': '2010년대', '20': '2020년대', all: '전체' };
   const eraLabel = (y) => (y ? ERA_LABEL[eraKey(y)] : '연도 미상');
-  const MODES = ['초성', '가수', '가사', '랜덤', '릴레이']; // 릴레이는 멀티 전용
-  const MODE_LABEL = { 초성: '초성 퀴즈', 가수: '가수 맞추기', 가사: '가사 퀴즈', 랜덤: '랜덤 (가사+초성+가수)', 릴레이: '노래 릴레이 (가수 보고 노래 쭉 적기)' };
+  const MODES = ['초성', '가수', '가사', '랜덤', '얼굴', '자켓', '릴레이']; // 릴레이는 멀티 전용
+  const MODE_LABEL = {
+    초성: '초성 퀴즈', 가수: '가수 맞추기', 가사: '가사 퀴즈', 랜덤: '랜덤 (가사+초성+가수)',
+    얼굴: '얼굴 퀴즈 (사진 보고 아이돌 이름)', 자켓: '자켓 퀴즈 (앨범 자켓 보고 타이틀곡)', 릴레이: '노래 릴레이 (가수 보고 노래 쭉 적기)',
+  };
+  const IMAGE_MODES = new Set(['얼굴', '자켓']);
 
   // null = 값 없음(현재 설정 보여주기), undefined = 잘못된 값
   function parseMode(arg) {
@@ -66,6 +70,8 @@
     return MODES.find((x) => x === m) || {
       chosung: '초성', artist: '가수', lyric: '가사', lyrics: '가사', random: '랜덤', 제목: '초성',
       relay: '릴레이', 노래릴레이: '릴레이', 쭉적기: '릴레이', 노래쭉적기: '릴레이', 노래적기: '릴레이',
+      face: '얼굴', 사진: '얼굴', 아이돌: '얼굴', 멤버: '얼굴', 얼굴보고: '얼굴',
+      cover: '자켓', jacket: '자켓', album: '자켓', 재킷: '자켓', 앨범: '자켓', 커버: '자켓', 앨범자켓: '자켓', 앨범재킷: '자켓', 앨범커버: '자켓', 타이틀곡: '자켓',
     }[m.toLowerCase()];
   }
   function parseEra(arg) {
@@ -87,6 +93,39 @@
     if (opt.era && opt.era !== 'all') p = p.filter((s) => eraKey(s.year) === opt.era);
     if (opt.artist) p = p.filter((s) => s.artist === opt.artist);
     return p;
+  }
+  // 얼굴 퀴즈: idols.js 의 [이름, 가수(여럿이면 |), 사진, 정답 표기, 출처]
+  function buildIdols(rows) {
+    return (rows || []).map((r, i) => {
+      const groups = String(r[1]).split('|');
+      const answers = [...new Set([norm(r[0]), ...(r[3] || [])])].filter(Boolean);
+      // 보여줄 소속 = 본인 이름인 솔로 활동 빼고 ("정국" → 방탄소년단). 없으면 솔로 가수
+      const shown = groups.filter((g) => !answers.includes(norm(g)));
+      return {
+        id: 'i' + i, title: r[0], reading: r[0], artist: shown.join(' · ') || '솔로 가수', solo: shown.length ? null : groups[0],
+        groups, img: r[2], answers, credit: r[4] ? '사진: ' + r[4] + ' · Wikimedia Commons' : '',
+      };
+    });
+  }
+  // 자켓 퀴즈: covers.js 의 [곡 제목, 가수, 이미지 주소, 같은 앨범의 다른 곡] → 수록곡에 이미지 붙이기
+  function buildCovers(db, rows) {
+    const find = (t, a) => (db.byArtist.get(a) || []).find((s) => s.title === t);
+    const out = [];
+    (rows || []).forEach((r) => {
+      const s = find(r[0], r[1]);
+      if (!s) return;
+      const others = (r[3] || []).map((t) => find(t, r[1])).filter(Boolean);
+      const answers = [...new Set([s, ...others].flatMap(songAnswers))];
+      out.push(Object.assign({}, s, { img: 'https://' + r[2] + '/600x600bb.jpg', answers, also: others.map((x) => x.title), credit: '앨범 아트: iTunes' }));
+    });
+    return out;
+  }
+  // 모드별 출제 목록. sets = { db, idols, covers, custom }
+  function poolFor(mode, sets, opt) {
+    if (mode === '얼굴') return (sets.idols || []).filter((q) => !opt.artist || q.groups.includes(opt.artist));
+    if (mode === '자켓') return filterPool({ songs: sets.covers || [] }, opt);
+    const p = filterPool(sets.db, opt);
+    return mode === '가사' ? [...p, ...(sets.custom || [])] : p;
   }
   function artistAnswers(a, aliases) { return [...new Set([a, ...((aliases || {})[a] || [])].map(norm).filter(Boolean))]; }
   function findArtist(db, arg) {
@@ -125,12 +164,25 @@
   function checkAnswer(text, q, mode, aliases) {
     const n = norm(text);
     if (!n) return { ok: false, close: false };
-    const answers = mode === '가수' ? artistAnswers(q.artist, aliases) : songAnswers(q);
+    const answers = mode === '가수' ? artistAnswers(q.artist, aliases) : q.answers || songAnswers(q);
     if (answers.includes(n)) return { ok: true, close: false };
     const close = answers.some((a) => a.length >= 3 && lev(n, a) <= (a.length >= 7 ? 2 : 1));
     return { ok: false, close };
   }
-  function questionHTML(q, mode, no) {
+  // 사진 문제는 에디터에 이미지 탭으로 띄움 (회사 프로젝트 스크린샷인 척)
+  const imageFile = (no) => `docs/screenshots/capture_${String(no).padStart(2, '0')}.png`;
+  const BLUR = [20, 12, 6, 2]; // 단계별 흐림 (px), 정답 공개 = 0
+  // 흐림 단계: 힌트 수 또는 지난 시간 (제한시간을 4등분) 중 큰 쪽. 단계가 오를수록 점수 ↓
+  function imageStage(hints, remain, tl) {
+    const byTime = tl ? Math.floor(((tl - remain) / tl) * 4) : 0;
+    return Math.max(0, Math.min(3, Math.max(hints, byTime)));
+  }
+  function questionHTML(q, mode, no, qNo) {
+    if (mode === '얼굴' || mode === '자켓') {
+      const file = imageFile(qNo || 1).split('/').pop();
+      const ask = mode === '얼굴' ? '이 사람은 누구?' : '이 앨범의 타이틀곡은?';
+      return `<div class="q-head">${mode === '얼굴' ? '📸' : '💿'} ${no} · ${mode === '얼굴' ? '얼굴 퀴즈' : '자켓 퀴즈'}</div><div class="q-title">${ask}</div><div class="q-meta">🖼 에디터의 <code>${esc(file)}</code> 탭을 보세요 · 점점 선명해져요${mode === '자켓' && q.year ? ' · 📅 ' + eraLabel(q.year) : ''}</div>`;
+    }
     if (mode === '가수') {
       return `<div class="q-head">🎤 ${no} · 가수 맞추기</div><div class="q-title">「${esc(q.title)}」</div><div class="q-meta">📅 ${q.year}년 · 이 노래를 부른 가수는?</div>`;
     }
@@ -140,6 +192,17 @@
     return `<div class="q-head">🎵 ${no} · 초성 퀴즈</div><div class="q-cho">${esc(choMask(q.reading))}</div><div class="q-meta">📅 ${eraLabel(q.year)} · ${titleKind(q.title)}</div>`;
   }
   function hintText(q, mode, n, byArtist) {
+    if (mode === '얼굴') {
+      const len = [...q.title.replace(/\s/g, '')].length;
+      if (q.solo) { // 솔로는 가수 이름 = 정답이라 대표곡으로
+        const songs = (byArtist && byArtist.get(q.solo)) || [];
+        if (n === 1) return `솔로 가수 · 이름 ${len}글자`;
+        if (n === 2) return songs.length ? `대표곡: <b>${esc(songs[0].title)}</b>` : `이름 초성: <span class="cho-inline">${esc(artistMask(q.title))}</span>`;
+      }
+      if (n === 1) return `소속 초성: <span class="cho-inline">${esc(artistMask(q.artist))}</span> · 이름 ${len}글자`;
+      if (n === 2) return `소속: <b>${esc(q.artist)}</b>`;
+      return `이름 첫 글자: <span class="cho-inline">${esc(artistMask(q.title, true))}</span>`;
+    }
     if (mode === '가수') {
       const others = ((byArtist && byArtist.get(q.artist)) || []).filter((s) => s !== q && norm(s.title) !== norm(q.title));
       if (n === 1) return others.length ? `같은 가수의 다른 곡: <b>${esc(pick(others).title)}</b>` : `가수 이름 ${[...q.artist.replace(/\s/g, '')].length}글자`;
@@ -370,7 +433,7 @@
       ['/패스', '이번 문제 넘기기'],
       [multi ? '/순위' : '/점수', multi ? '현재 순위 보기' : '현재 점수 보기'],
       ['/종료', '게임 끝내기'],
-      ['/모드 이름', multi ? '초성 · 가수 · 가사 · 랜덤 · 릴레이' : '초성 · 가수 · 가사 · 랜덤'],
+      ['/모드 이름', multi ? '초성 · 가수 · 가사 · 랜덤 · 얼굴 · 자켓 · 릴레이' : '초성 · 가수 · 가사 · 랜덤 · 얼굴 · 자켓'],
       ['/연대 값', '90 · 00 · 10 · 20 · 전체'],
       ['/가수 이름', '특정 가수만 (비우면 해제)'],
       ['/시간 초', '제한시간 (0 = 무제한)'],
@@ -386,17 +449,17 @@
       : '<br>정답은 그냥 채팅으로 치면 돼요 (띄어쓰기·대소문자 무시, 영어/한글 둘 다 OK).<br>시작·힌트·패스·점수·종료는 <code>/</code> 없이 쳐도 돼요.<br>🙈 <kbd>Esc</kbd> 채팅 숨기기 (숨기면 타이머 일시정지)';
     return `📖 <b>명령어</b><div class="help">${rows.map(([a, b]) => `<code>${esc(a)}</code><span>${esc(b)}</span>`).join('')}</div>${tail}`;
   }
-  function statsHTML(db, customCount) {
+  function statsHTML(db, customCount, idolCount, coverCount) {
     const cnt = { '90': 0, '00': 0, '10': 0, '20': 0 };
     db.songs.forEach((s) => cnt[eraKey(s.year)]++);
     const top = [...db.byArtist.entries()].sort((a, b) => b[1].length - a[1].length).slice(0, 5).map(([a, l]) => `${esc(a)} ${l.length}`).join(' · ');
-    return `📚 수록곡 <b>${db.songs.length}곡</b> · 가수 ${db.byArtist.size}팀 (${db.minYear}~${db.maxYear})<br>90년대 ${cnt['90']} · 2000년대 ${cnt['00']} · 2010년대 ${cnt['10']} · 2020년대 ${cnt['20']}<br>많이 나오는 가수: ${top}<br>가사 문제: ${customCount}개`;
+    return `📚 수록곡 <b>${db.songs.length}곡</b> · 가수 ${db.byArtist.size}팀 (${db.minYear}~${db.maxYear})<br>90년대 ${cnt['90']} · 2000년대 ${cnt['00']} · 2010년대 ${cnt['10']} · 2020년대 ${cnt['20']}<br>많이 나오는 가수: ${top}<br>가사 문제: ${customCount}개${idolCount != null ? ` · 얼굴 퀴즈 ${idolCount}명 · 자켓 ${coverCount}장` : ''}`;
   }
 
   return {
     CHO, isHangul, choOf, esc, norm, pick, shuffle, lev, choMask, artistMask,
-    eraKey, ERA_LABEL, eraLabel, MODES, MODE_LABEL, parseMode, parseEra,
-    buildDB, filterPool, artistAnswers, findArtist, songAnswers, normalizeCustom, parseCustomArg,
+    eraKey, ERA_LABEL, eraLabel, MODES, MODE_LABEL, IMAGE_MODES, parseMode, parseEra,
+    buildDB, filterPool, buildIdols, buildCovers, poolFor, imageFile, BLUR, imageStage, artistAnswers, findArtist, songAnswers, normalizeCustom, parseCustomArg,
     titleKind, checkAnswer, questionHTML, hintText, card, points, grade, helpHTML, statsHTML,
     lyricLines, maskTitle, pickSnippet, chooseLyrics, makeLyricsFetcher, prepareQuestion,
     titleVariants, buildDiscography, relayCheck, makeDiscographyFetcher,
