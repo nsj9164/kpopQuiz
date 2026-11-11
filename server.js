@@ -162,6 +162,7 @@ class Room {
     const cmd = m ? m[1] : '';
     const arg = m ? m[2].trim() : '';
     const g = this.g;
+    if (g) { g.idle = 0; if (g.r) g.r.active = true; } // 누가 뭐라도 치면 자리에 사람이 있는 것
 
     if (!isSlash && this.wc) return this.wcMessage(p, text, cmd, arg);
     // 릴레이: 자기 차례인 사람이 친 채팅만 채점
@@ -244,12 +245,12 @@ class Room {
     if (this.g) return this.bot('이미 게임이 진행 중이에요! 그만하려면 <code>/종료</code>');
     if (this.wc) return this.bot('끝말잇기 중이에요! 노래 퀴즈를 하려면 <code>/종료</code> 후에 <code>/시작</code>');
     if (this.set.mode === '릴레이') return this.relayStart(p, arg);
-    let n = arg === '' ? 10 : parseInt(arg, 10);
-    if (isNaN(n) || n < 0) n = 10;
+    let n = arg === '' ? 0 : parseInt(arg, 10); // 숫자 없으면 무제한 (/종료 로 끝)
+    if (isNaN(n) || n < 0) n = 0;
     n = Math.min(n, 999);
     const pool = this.pool();
     if (!pool.length) return this.bot('조건에 맞는 노래가 없어요. <code>/연대 전체</code> 또는 <code>/가수</code> 로 필터를 풀어보세요.');
-    const g = this.g = { mode: this.set.mode, limit: n, deck: shuffle(pool.slice()), q: null, qMode: null, qNo: 0, hints: 0, locked: true, remain: 0, tl: 0, timer: null, nextT: null, scores: new Map(), lastWinner: null, streak: 0, prep: null, warnedOffline: false };
+    const g = this.g = { mode: this.set.mode, limit: n, deck: shuffle(pool.slice()), q: null, qMode: null, qNo: 0, hints: 0, locked: true, remain: 0, tl: 0, timer: null, nextT: null, scores: new Map(), lastWinner: null, streak: 0, prep: null, warnedOffline: false, idle: 0 };
     g.prep = this.prepare(g); // 첫 문제 가사 미리 불러오기
     this.preload(g);
     this.img({ close: true });
@@ -348,6 +349,8 @@ class Room {
     g.streak = 0;
     this.reveal();
     this.bot(`⌛ 시간 초과! 아무도 못 맞혔어요. 정답은…${Q.card(g.q)}`);
+    // 아무도 아무것도 안 치고 3문제 연속 시간 초과 = 다들 자리 비움 → 끝
+    if (++g.idle >= 3) { this.bot('😴 3문제 연속으로 아무도 입력이 없어서 게임을 끝낼게요.'); return this.finish(false); }
     this.scheduleNext(2200);
   }
   pass(p) {
@@ -564,12 +567,12 @@ class Room {
     return artist ? getDiscography(artist) : Promise.resolve(null);
   }
   relayStart(p, arg) {
-    let n = arg === '' ? 3 : parseInt(arg, 10);
-    if (isNaN(n) || n < 0) n = 3;
+    let n = arg === '' ? 0 : parseInt(arg, 10); // 숫자 없으면 무제한 (/종료 로 끝)
+    if (isNaN(n) || n < 0) n = 0;
     n = Math.min(n, 99);
     const deck = this.relayArtists();
     if (!deck.length) return this.bot('조건에 맞는 가수가 없어요. <code>/연대 전체</code> 또는 <code>/가수</code> 로 필터를 풀어보세요.');
-    const g = this.g = { mode: '릴레이', limit: n, deck, qNo: 0, r: null, locked: true, remain: 0, tl: 0, timer: null, nextT: null, scores: new Map(), prep: null, warnedOffline: false };
+    const g = this.g = { mode: '릴레이', limit: n, deck, qNo: 0, r: null, locked: true, remain: 0, tl: 0, timer: null, nextT: null, scores: new Map(), prep: null, warnedOffline: false, idle: 0 };
     g.prep = this.relayPrepare(g); // 첫 가수 노래 목록 미리 불러오기
     const tt = this.set.turnTime;
     this.bot(`🎮 <b>${esc(p.name)}</b>님이 게임을 시작했어요!<br>모드: <b>${MODE_LABEL['릴레이']}</b> · <b>${n ? n + '라운드' : '무한'}</b> · 한 사람 차례 <b>${tt ? tt + '초' : '무제한'}</b>` +
@@ -709,6 +712,8 @@ class Room {
     this.bot(html);
     g.r = null;
     clearTimeout(g.nextT);
+    // 한 라운드 내내 아무도 안 치고 전부 시간 초과 = 다들 자리 비움 → 끝
+    if (!r.active) { this.bot('😴 한 라운드 동안 아무도 입력이 없어서 게임을 끝낼게요.'); return this.finish(false); }
     g.nextT = setTimeout(() => this.relayRound(), 4000);
   }
   setTurnTime(arg) {
@@ -734,7 +739,7 @@ class Room {
     const extra = key === '가사' ? '<br>가사는 LRCLIB에서 불러와요'
       : key === '얼굴' ? `<br>📸 각자 에디터에 사진이 흐릿하게 열리고 점점 선명해져요. 빨리 맞힐수록 점수 ↑ (${idols.length}명)<br>이름은 예명·본명·영어 다 OK · 사진: 위키미디어 공용`
       : key === '자켓' ? `<br>💿 각자 에디터에 앨범 자켓이 흐릿하게 열리고 점점 선명해져요. 그 앨범 타이틀곡 제목을 맞히면 정답 (${covers.length}장)`
-      : key === '릴레이' ? `<br>가수 이름이 나오면 돌아가면서 그 가수 노래를 하나씩 적어요.<br>한 사람 차례: <b>${this.set.turnTime ? this.set.turnTime + '초' : '무제한'}</b> (<code>/시간</code> 으로 변경) · <code>/시작 3</code> = 3라운드`
+      : key === '릴레이' ? `<br>가수 이름이 나오면 돌아가면서 그 가수 노래를 하나씩 적어요.<br>한 사람 차례: <b>${this.set.turnTime ? this.set.turnTime + '초' : '무제한'}</b> (<code>/시간</code> 으로 변경) · <code>/시작</code> = 무제한 (<code>/종료</code> 로 끝), <code>/시작 3</code> = 3라운드`
       : '';
     this.bot(`✅ 모드 변경: <b>${MODE_LABEL[key]}</b>${extra}`);
   }

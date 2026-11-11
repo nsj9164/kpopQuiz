@@ -130,13 +130,13 @@
 
   function start(arg) {
     if (S.running) return say('이미 게임이 진행 중이에요! 그만하려면 <code>/종료</code>');
-    let n = arg === '' ? 10 : parseInt(arg, 10);
-    if (isNaN(n) || n < 0) n = 10;
+    let n = arg === '' ? 0 : parseInt(arg, 10); // 숫자 없으면 무제한 (/종료 로 끝)
+    if (isNaN(n) || n < 0) n = 0;
     n = Math.min(n, 999);
     const p = pool();
     if (!p.length) return say('조건에 맞는 노래가 없어요. <code>/연대 전체</code> 또는 <code>/가수</code> 로 필터를 풀어보세요.');
     S.runId++;
-    Object.assign(S, { running: true, limit: n, deck: shuffle(p.slice()), qNo: 0, correct: 0, score: 0, streak: 0, bestStreak: 0, q: null, locked: true, prep: null });
+    Object.assign(S, { running: true, limit: n, deck: shuffle(p.slice()), qNo: 0, correct: 0, score: 0, streak: 0, bestStreak: 0, q: null, locked: true, prep: null, idle: 0 });
     S.prep = prepare(); // 첫 문제 가사 미리 불러오기
     preload(S.prep);
     VSimg({ close: true });
@@ -206,6 +206,8 @@
     S.streak = 0;
     reveal();
     say(`⌛ 시간 초과! 정답은…${Q.card(S.q)}`, 0);
+    // 아무것도 안 치고 3문제 연속 시간 초과 = 자리 비움 → 끝
+    if (++S.idle >= 3) { say('😴 3문제 연속으로 입력이 없어서 게임을 끝낼게요.', 0); return finish(false); }
     scheduleNext(2000);
   }
   function pass() {
@@ -535,6 +537,7 @@
     const t = raw.trim();
     if (!t) return;
     const meEl = addMsg('me', esc(t));
+    S.idle = 0; // 뭐라도 치면 자리에 있는 것
     const isSlash = /^[\/!]/.test(t);
     const m = t.replace(/^[\/!]\s*/, '').match(/^(\S+)\s*([\s\S]*)$/);
     const cmd = m ? m[1] : '';
