@@ -66,6 +66,7 @@ function customList() {
 // ───── 방 ─────
 const NOSLASH = new Set(['시작', '힌트', '패스', '스킵', '포기', '점수', '순위', '종료', '그만', '도움말', '명령어']);
 const MEDALS = ['🥇', '🥈', '🥉'];
+const SKIP_MIN = 3; // 이 방에서 같은 가수를 이만큼 패스하면 그 가수 노래를 덜 냄
 const rooms = new Map();
 function getRoom(raw) {
   const name = String(raw || '').replace(/[^\w가-힣-]/g, '').slice(0, 20) || 'lobby';
@@ -82,6 +83,7 @@ class Room {
     this.g = null;
     this.wc = null; // 끝말잇기
     this.emptyT = null;
+    this.artistLog = new Map(); // 가수 → { pass, ok, told }: 이 방에서 패스를 많이 한 가수는 덜 나오게
   }
 
   // 전송
@@ -234,10 +236,43 @@ class Room {
   preload(g) {
     if (g.prep) g.prep.then((it) => { if (this.g === g && it && it.q && it.q.img) this.broadcast({ t: 'img', preload: it.q.img }); }, () => {});
   }
+  // ───── 패스 많이 한 가수 덜 내기 ─────
+  // 이 문제의 가수 (얼굴 퀴즈는 소속 그룹들). 직접 추가한 문제는 빼고
+  artistsOf(q) { return q && !q.custom ? (q.groups || [q.artist]).filter(Boolean) : []; }
+  // 출제 비중: 패스 3번부터, 맞힌 횟수보다 패스가 많을 때만 낮춤 (3번 1/2, 4번 1/3 … 최소 1/6)
+  artistWeight(q) {
+    let w = 1;
+    for (const a of this.artistsOf(q)) {
+      const s = this.artistLog.get(a);
+      if (s && s.pass >= SKIP_MIN && s.pass > s.ok) w = Math.min(w, Math.max(1 / 6, 1 / (s.pass - 1)));
+    }
+    return w;
+  }
+  // 패스·정답 기록. 패스로 막 비중이 낮아진 가수 이름들을 돌려줌
+  logArtist(q, key) {
+    const lowered = [];
+    for (const a of this.artistsOf(q)) {
+      const s = this.artistLog.get(a) || { pass: 0, ok: 0, told: false };
+      s[key]++;
+      this.artistLog.set(a, s);
+      if (key === 'pass' && !s.told && s.pass >= SKIP_MIN && s.pass > s.ok) { s.told = true; lowered.push(a); }
+    }
+    return lowered;
+  }
+
   prepare(g) {
     return Q.prepareQuestion({
       mode: g.mode,
-      takeSong: () => { if (!g.deck.length) g.deck = shuffle(this.pool().slice()); return g.deck.pop() || null; },
+      takeSong: () => {
+        // 패스 많이 한 가수의 곡은 확률적으로 이번 바퀴에서 뺌 (덱이 그 가수뿐이면 결국 나옴)
+        for (let i = 0; ; i++) {
+          if (!g.deck.length) g.deck = shuffle(this.pool().slice());
+          const s = g.deck.pop();
+          if (!s) return null;
+          const w = this.artistWeight(s);
+          if (w >= 1 || Math.random() < w || i >= 30) return s;
+        }
+      },
       getLyrics,
     });
   }
@@ -339,6 +374,7 @@ class Room {
     s.correct++;
     g.scores.set(p.id, s);
     this.bot(`🎉 <b>${esc(p.name)}</b>님 정답! +${pts.total}점${pts.bonus ? ` (🔥 ${g.streak}연속 +${pts.bonus})` : ''}${Q.revealCard(g.q, g.qMode, r)}`);
+    this.logArtist(g.q, 'ok');
     this.scheduleNext(2000);
   }
   timeout() {
@@ -363,6 +399,8 @@ class Room {
     g.streak = 0;
     this.reveal();
     this.bot(`⏭ ${esc(p.name)}님이 패스했어요. 정답은…${Q.revealCard(g.q, g.qMode)}`);
+    const lowered = this.logArtist(g.q, 'pass');
+    if (lowered.length) this.bot(`📉 이 방에서 <b>${lowered.map(esc).join(', ')}</b> 문제를 자주 패스해서 앞으로 덜 나오게 할게요 (패스보다 많이 맞히면 다시 원래대로)`);
     this.scheduleNext(2000);
   }
   scheduleNext(ms) {
