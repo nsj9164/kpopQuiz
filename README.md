@@ -95,7 +95,7 @@
 ## 문제 데이터
 
 - `js/songs.js` — 1996~2025년 아이돌 대표곡 (제목·가수·연도) + 가수 별명/영어 이름. 가사는 저장하지 않고 게임할 때 LRCLIB에서 불러와요
-- `js/songs-extra.js` — 추가 노래 약 1000곡 (iTunes 인기순으로 가수마다 4~6곡). `node tools/build-songs.js`로 다시 만들 수 있어요
+- `js/songs-extra.js` — 추가 노래 약 2000곡 (iTunes 인기순으로 가수마다 7~9곡, 새 가수는 7곡). `node tools/build-songs.js`로 다시 만들 수 있어요
   - 가수를 늘리려면 `songs.js`의 `ARTIST_EN`(영어 이름)과 `ARTIST_ALIASES`에 추가하고 다시 실행. iTunes에서 곡을 3개도 못 찾은 새 가수는 자동으로 빠져요
   - 아직 없는 가수 후보는 `node tools/find-artists.js` 로 볼 수 있어요 (위키데이터에서 장르 K-pop, 위키 문서 많은 순). 그룹 멤버·배우도 섞여 나오니 골라서 넣기
   - 영어 제목의 한글 발음(초성 퀴즈용)은 `tools/readings.json`. 발음이 없는 제목은 빠지고 `tools/readings-todo.txt`에 적혀요
