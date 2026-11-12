@@ -128,6 +128,30 @@
     const p = filterPool(sets.db, opt);
     return mode === '가사' ? [...p, ...(sets.custom || [])] : p;
   }
+  // ───── 이미 나온 문제 기억하기 (안 나온 문제부터 내려고) ─────
+  const seenKey = (q) => (q.groups ? '얼굴:' : '') + q.title + '|' + q.artist;
+  // saved: 예전에 나온 순서대로 키 목록 (오래된 것 먼저). 최근 max 개까지만 기억
+  function makeSeen(saved, max) {
+    const limit = max || 5000;
+    const order = new Map();
+    let n = 0;
+    (Array.isArray(saved) ? saved : []).forEach((k) => order.set(String(k), n++));
+    return {
+      add(k) { order.delete(k); order.set(k, n++); if (order.size > limit) order.delete(order.keys().next().value); },
+      rank(k) { return order.has(k) ? order.get(k) : -1; }, // -1 = 안 나옴, 클수록 최근
+      list() { return [...order.keys()]; },
+    };
+  }
+  // 출제 순서 (뒤에서부터 뽑음): 안 나온 문제를 섞어서 먼저, 나온 문제는 오래전에 나온 것부터
+  function orderDeck(list, seen, keyOf, arrangeFresh) {
+    const key = keyOf || seenKey;
+    const fresh = [], old = [];
+    for (const x of list) (seen.rank(key(x)) < 0 ? fresh : old).push(x);
+    old.sort((a, b) => seen.rank(key(b)) - seen.rank(key(a)));
+    return [...old, ...(arrangeFresh || shuffle)(fresh)];
+  }
+  const countFresh = (list, seen, keyOf) => list.filter((x) => seen.rank((keyOf || seenKey)(x)) < 0).length;
+
   function artistAnswers(a, aliases) { return [...new Set([a, ...((aliases || {})[a] || [])].map(norm).filter(Boolean))]; }
   function findArtist(db, arg) {
     const n = norm(arg);
@@ -278,27 +302,35 @@
     }
     return out.slice(0, 90);
   }
-  // 문제용 두 줄 + 힌트용 다음 줄 고르기 (가능하면 제목이 안 들어간 곳으로)
+  // 문제용 4줄(안 되면 3줄) + 힌트용 다음 줄 고르기 (가능하면 제목이 안 들어간 곳으로)
+  const SNIPPET_LINES = [4, 3];
   function pickSnippet(plain, song) {
     const lines = lyricLines(plain);
     if (lines.length < 6) return null;
     const ans = songAnswers(song).filter((a) => a.length >= 2);
     const hasTitle = (l) => { const n = norm(l); return ans.some((a) => n.includes(a)); };
     const preferHangul = lines.some((l) => /[가-힣]/.test(l));
-    const ok = (i) => {
-      const a = lines[i], b = lines[i + 1];
-      if (!a || !b || norm(a) === norm(b)) return false;
-      if (a.length + b.length < 10) return false;
-      if (hasTitle(a) || hasTitle(b)) return false;
-      if (preferHangul && !/[가-힣]/.test(a + b)) return false;
+    const ok = (i, n) => {
+      const w = lines.slice(i, i + n);
+      if (w.length < n) return false;
+      if (new Set(w.map(norm)).size < n - 1) return false; // 같은 줄만 반복되는 곳은 X
+      if (w.join('').length < 6 * n) return false;
+      if (w.some(hasTitle)) return false;
+      if (preferHangul && !/[가-힣]/.test(w.join(''))) return false;
       return true;
     };
-    const order = shuffle([...Array(lines.length - 1).keys()]);
-    const i = order.find(ok) !== undefined ? order.find(ok) : order[0];
-    return {
-      text: [lines[i], lines[i + 1]].map((l) => maskTitle(l, song)).join('\n'),
-      next: lines[i + 2] ? maskTitle(lines[i + 2], song) : null,
-    };
+    const make = (i, n) => ({
+      text: lines.slice(i, i + n).map((l) => maskTitle(l, song)).join('\n'),
+      next: lines[i + n] ? maskTitle(lines[i + n], song) : null,
+    });
+    const order = shuffle([...Array(lines.length).keys()]);
+    for (const n of SNIPPET_LINES) {
+      const i = order.find((k) => ok(k, n));
+      if (i !== undefined) return make(i, n);
+    }
+    // 제목이 안 들어간 구간이 없으면 아무 데나 (제목은 ♪♪♪ 로 가림)
+    const n = SNIPPET_LINES[0];
+    return make(Math.floor(Math.random() * (lines.length - n + 1)), n);
   }
   // ───── 노래 부르기: 제목 보고 가사 한 소절 적기 ─────
   // 가사 길이 점수: 한글 1글자 = 2, 영어·숫자 1글자 = 1. 12점(한글 6글자, 영어 12글자) 이상이어야 인정
@@ -594,7 +626,7 @@
   return {
     CHO, isHangul, choOf, esc, norm, pick, shuffle, lev, choMask, artistMask,
     eraKey, ERA_LABEL, eraLabel, MODES, MODE_LABEL, IMAGE_MODES, parseMode, parseEra,
-    buildDB, filterPool, buildIdols, buildCovers, poolFor, imageFile, BLUR, imageStage, artistAnswers, findArtist, songAnswers, normalizeCustom, parseCustomArg,
+    buildDB, filterPool, buildIdols, buildCovers, poolFor, seenKey, makeSeen, orderDeck, countFresh, imageFile, BLUR, imageStage, artistAnswers, findArtist, songAnswers, normalizeCustom, parseCustomArg,
     titleKind, checkAnswer, questionHTML, hintText, card, revealCard, missText, points, grade, helpHTML, statsHTML,
     lyricLines, maskTitle, pickSnippet, chooseLyrics, makeLyricsFetcher, prepareQuestion,
     SING_HELP, buildSing, singCheck, singMask, fuzzyFind,

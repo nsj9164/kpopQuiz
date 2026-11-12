@@ -17,9 +17,10 @@ const CACHE = path.join(ROOT, 'data', 'itunes-cache');
 const OUT = path.join(ROOT, 'js', 'songs-extra.js');
 const READINGS = path.join(__dirname, 'readings.json');
 const TODO = path.join(__dirname, 'readings-todo.txt');
-const ADD_BIG = 4;   // 이미 10곡 이상 있는 가수는 4곡 추가
-const ADD_SMALL = 6; // 나머지 가수
-const ADD_NEW = 6;   // songs.js 에 곡이 없는 가수
+const ADD_BIG = 7;   // 이미 10곡 이상 있는 가수는 7곡 추가
+const ADD_SMALL = 9; // 나머지 가수
+const ADD_NEW = 7;   // songs.js 에 곡이 없는 가수
+const MIN_NEW = 3;   // 곡이 없는 가수는 iTunes에서 이만큼도 못 찾으면 뺌 (피처링·OST만 있는 경우)
 
 const sb = { window: {} };
 vm.runInNewContext(fs.readFileSync(path.join(ROOT, 'js', 'songs.js'), 'utf8'), sb);
@@ -61,6 +62,18 @@ const stripParens = (t) => {
   return /[0-9A-Za-z가-힣]/.test(s) ? s : String(t).trim();
 };
 const hasLatin = (s) => /[A-Za-z]/.test(s);
+// 끝에 짝 없이 붙은 괄호·따옴표 떼기 ('Make It Count, Pt. 1]"' → 'Make It Count, Pt. 1')
+function tidyTitle(t) {
+  let s = String(t).trim();
+  const count = (ch) => [...s].filter((c) => ch.includes(c)).length;
+  for (;;) {
+    const last = s.slice(-1);
+    if ('"“”'.includes(last) && count('"“”') % 2) s = s.slice(0, -1).trim();
+    else if (last === ']' && count('[') < count(']')) s = s.slice(0, -1).trim();
+    else if (last === ')' && count('(') < count(')')) s = s.slice(0, -1).trim();
+    else return s;
+  }
+}
 
 function badTrack(name) {
   if (JAPANESE.test(name) || KANJI.test(stripParens(name))) return true;
@@ -109,10 +122,10 @@ async function collect(artist) {
   for (const t of tracks) {
     const k = krName.get(t.trackId);
     const krTitle = k && !badTrack(k.trackName) ? k.trackName : t.trackName;
-    const title = stripParens(krTitle) || krTitle;
-    const usTitle = stripParens(t.trackName) || t.trackName;
+    const title = tidyTitle(stripParens(krTitle) || krTitle);
+    const usTitle = tidyTitle(stripParens(t.trackName) || t.trackName);
     const keys = [...Q.titleVariants(krTitle).keys, ...Q.titleVariants(t.trackName).keys];
-    if (keys.some((x) => taken.has(x))) continue;
+    if (keys.some((x) => taken.has(x)) || taken.has(Q.norm(title))) continue;
     if (have.some((h) => Q.norm(title).startsWith(h))) continue; // "루비 : 슬픈 눈물" ↔ 이미 있는 "루비"
     const year = Math.min(...[t.releaseDate, k && k.releaseDate].filter(Boolean).map((d) => +String(d).slice(0, 4)));
     const key = Q.norm(title);
@@ -136,6 +149,7 @@ async function collect(artist) {
     const want = !have ? ADD_NEW : have >= 10 ? ADD_BIG : ADD_SMALL;
     let r;
     try { r = await collect(artist); } catch (e) { r = { error: e.message }; }
+    if (!r.error && !have && r.songs.length < MIN_NEW) r = { error: `곡이 ${r.songs.length}개뿐이라 뺌` };
     if (r.error) { problems.push(`${artist}: ${r.error}`); console.log(`[${i + 1}/${all.length}] ${artist} ✗ ${r.error}`); continue; }
     let added = 0;
     for (const s of r.songs) {

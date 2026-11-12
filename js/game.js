@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   const Q = window.QuizCore;
-  const { esc, pick, shuffle, ERA_LABEL, MODE_LABEL } = Q;
+  const { esc, pick, ERA_LABEL, MODE_LABEL } = Q;
   const $ = (s) => document.querySelector(s);
   const elChat = $('#chat'), elMsgs = $('#chat-msgs'), elInput = $('#chat-input'), elTimer = $('#chat-timer');
   const BOT = '멜로디봇';
@@ -18,6 +18,7 @@
   const idols = Q.buildIdols(window.IDOLS);           // 얼굴 퀴즈 (위키미디어 공용 사진)
   const covers = Q.buildCovers(db, window.COVERS);    // 자켓 퀴즈 (iTunes 앨범 아트)
   const VSimg = (ev) => { if (window.VS && window.VS.image) window.VS.image(ev); };
+  const seen = Q.makeSeen(store.get('seen', [])); // 예전에 나온 문제 (다음 게임에서 안 나온 문제부터 내려고)
 
   // LRCLIB 에서 가사 불러오기 (7초 넘으면 포기)
   function fetchJSON(url) {
@@ -123,7 +124,7 @@
     if (st !== S.stage) { S.stage = st; VSimg({ blur: Q.BLUR[st] }); }
   }
   function takeSong() {
-    if (!S.deck.length) S.deck = shuffle(pool().slice());
+    if (!S.deck.length) S.deck = Q.orderDeck(pool(), seen);
     return S.deck.pop() || null;
   }
   const prepare = () => Q.prepareQuestion({ mode: S.mode, takeSong, getLyrics });
@@ -134,14 +135,15 @@
     if (isNaN(n) || n < 0) n = 0;
     n = Math.min(n, 999);
     const p = pool();
+    const fresh = Q.countFresh(p, seen);
     if (!p.length) return say('조건에 맞는 노래가 없어요. <code>/연대 전체</code> 또는 <code>/가수</code> 로 필터를 풀어보세요.');
     S.runId++;
-    Object.assign(S, { running: true, limit: n, deck: shuffle(p.slice()), qNo: 0, correct: 0, score: 0, streak: 0, bestStreak: 0, q: null, locked: true, prep: null, idle: 0 });
+    Object.assign(S, { running: true, limit: n, deck: Q.orderDeck(p, seen), qNo: 0, correct: 0, score: 0, streak: 0, bestStreak: 0, q: null, locked: true, prep: null, idle: 0 });
     S.prep = prepare(); // 첫 문제 가사 미리 불러오기
     preload(S.prep);
     VSimg({ close: true });
     say(`🎮 <b>게임 시작!</b><br>모드: <b>${modeLabel()}</b><br>문제 수: <b>${n ? n + '문제' : '무한'}</b> · 제한시간: <b>${S.timeLimit ? S.timeLimit + '초' : '없음'}</b>` +
-      `${filterLabel() ? '<br>' + filterLabel() : ''} <span style="opacity:.7">(${p.length}${S.mode === '얼굴' ? '명' : S.mode === '자켓' ? '장' : '곡'} 중 출제)</span>`);
+      `${filterLabel() ? '<br>' + filterLabel() : ''} <span style="opacity:.7">(${p.length}${S.mode === '얼굴' ? '명' : S.mode === '자켓' ? '장' : '곡'} 중 출제${fresh < p.length ? `, 아직 안 나온 문제 ${fresh}개 먼저` : ''})</span>`);
     S.nextT = setTimeout(next, 900);
   }
 
@@ -165,6 +167,8 @@
       say('가사를 찾지 못한 곡이라 이번 문제는 초성 퀴즈로 낼게요.', 0);
     }
     const q = item.q;
+    seen.add(Q.seenKey(q));
+    store.set('seen', seen.list());
     Object.assign(S, { q, qMode: item.mode, hints: 0, locked: true, stage: 0 });
     S.qNo++;
     const no = `문제 ${S.qNo}${S.limit ? ' / ' + S.limit : ''}`;

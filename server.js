@@ -68,6 +68,18 @@ const NOSLASH = new Set(['시작', '힌트', '패스', '스킵', '포기', '점�
 const MEDALS = ['🥇', '🥈', '🥉'];
 const SKIP_MIN = 3; // 이 방에서 같은 가수를 이만큼 패스하면 그 가수 노래를 덜 냄
 const rooms = new Map();
+// 방마다 나온 문제 기록 (서버를 다시 켜도 안 나온 문제부터 나오게 data/seen.json 에 저장)
+const SEEN_FILE = path.join(ROOT, 'data', 'seen.json');
+const seenStore = (() => { try { const v = JSON.parse(fs.readFileSync(SEEN_FILE, 'utf8')); return v && typeof v === 'object' ? v : {}; } catch (e) { return {}; } })();
+let seenSaveT = null;
+function saveSeen(room) {
+  seenStore[room.name] = room.seen.list();
+  clearTimeout(seenSaveT);
+  seenSaveT = setTimeout(() => {
+    try { fs.mkdirSync(path.dirname(SEEN_FILE), { recursive: true }); fs.writeFileSync(SEEN_FILE, JSON.stringify(seenStore)); } catch (e) { console.error('[!] seen.json 저장 실패:', e.message); }
+  }, 1000);
+}
+
 function getRoom(raw) {
   const name = String(raw || '').replace(/[^\w가-힣-]/g, '').slice(0, 20) || 'lobby';
   if (!rooms.has(name)) rooms.set(name, new Room(name));
@@ -83,6 +95,7 @@ class Room {
     this.g = null;
     this.wc = null; // 끝말잇기
     this.emptyT = null;
+    this.seen = Q.makeSeen(seenStore[name]); // 이 방에서 나온 문제 (오래된 것 먼저)
     this.artistLog = new Map(); // 가수 → { pass, ok, told }: 이 방에서 패스를 많이 한 가수는 덜 나오게
   }
 
@@ -266,7 +279,7 @@ class Room {
       takeSong: () => {
         // 패스 많이 한 가수의 곡은 확률적으로 이번 바퀴에서 뺌 (덱이 그 가수뿐이면 결국 나옴)
         for (let i = 0; ; i++) {
-          if (!g.deck.length) g.deck = shuffle(this.pool().slice());
+          if (!g.deck.length) g.deck = Q.orderDeck(this.pool(), this.seen);
           const s = g.deck.pop();
           if (!s) return null;
           const w = this.artistWeight(s);
@@ -286,12 +299,13 @@ class Room {
     n = Math.min(n, 999);
     const pool = this.pool();
     if (!pool.length) return this.bot('조건에 맞는 노래가 없어요. <code>/연대 전체</code> 또는 <code>/가수</code> 로 필터를 풀어보세요.');
-    const g = this.g = { mode: this.set.mode, limit: n, deck: shuffle(pool.slice()), q: null, qMode: null, qNo: 0, hints: 0, locked: true, remain: 0, tl: 0, timer: null, nextT: null, scores: new Map(), lastWinner: null, streak: 0, prep: null, warnedOffline: false, idle: 0 };
+    const g = this.g = { mode: this.set.mode, limit: n, deck: Q.orderDeck(pool, this.seen), q: null, qMode: null, qNo: 0, hints: 0, locked: true, remain: 0, tl: 0, timer: null, nextT: null, scores: new Map(), lastWinner: null, streak: 0, prep: null, warnedOffline: false, idle: 0 };
     g.prep = this.prepare(g); // 첫 문제 가사 미리 불러오기
     this.preload(g);
     this.img({ close: true });
+    const fresh = Q.countFresh(pool, this.seen);
     const filter = `<br>연대: ${ERA_LABEL[this.set.era]}${this.set.artist ? ' · 가수: ' + esc(this.set.artist) : ''}`;
-    this.bot(`🎮 <b>${esc(p.name)}</b>님이 게임을 시작했어요!<br>모드: <b>${MODE_LABEL[this.set.mode]}</b><br>문제 수: <b>${n ? n + '문제' : '무한'}</b> · 제한시간: <b>${this.set.time ? this.set.time + '초' : '없음'}</b>${filter} <span style="opacity:.7">(${pool.length}${this.set.mode === '얼굴' ? '명' : this.set.mode === '자켓' ? '장' : '곡'} 중 출제)</span>`);
+    this.bot(`🎮 <b>${esc(p.name)}</b>님이 게임을 시작했어요!<br>모드: <b>${MODE_LABEL[this.set.mode]}</b><br>문제 수: <b>${n ? n + '문제' : '무한'}</b> · 제한시간: <b>${this.set.time ? this.set.time + '초' : '없음'}</b>${filter} <span style="opacity:.7">(${pool.length}${this.set.mode === '얼굴' ? '명' : this.set.mode === '자켓' ? '장' : '곡'} 중 출제${fresh < pool.length ? `, 아직 안 나온 문제 ${fresh}개 먼저` : ''})</span>`);
     g.nextT = setTimeout(() => this.next(), 1500);
   }
 
@@ -316,6 +330,8 @@ class Room {
       this.bot('가사를 찾지 못한 곡이라 이번 문제는 초성 퀴즈로 낼게요.');
     }
     g.q = item.q;
+    this.seen.add(Q.seenKey(g.q));
+    saveSeen(this);
     g.qMode = item.mode;
     g.qNo++;
     g.hints = 0;
@@ -596,9 +612,9 @@ class Room {
   relayArtists() {
     const cnt = new Map();
     Q.filterPool(db, this.set).forEach((s) => cnt.set(s.artist, (cnt.get(s.artist) || 0) + 1));
-    const all = [...cnt.keys()];
-    // 뒤에서부터 뽑으니까 수록곡 많은(유명한) 가수를 뒤에
-    return [...shuffle(all.filter((a) => cnt.get(a) < 3)), ...shuffle(all.filter((a) => cnt.get(a) >= 3))];
+    // 뒤에서부터 뽑음: 이 방에서 안 나온 가수 먼저, 그중에서도 수록곡 많은(유명한) 가수를 뒤에
+    const famousLast = (l) => [...shuffle(l.filter((a) => cnt.get(a) < 3)), ...shuffle(l.filter((a) => cnt.get(a) >= 3))];
+    return Q.orderDeck([...cnt.keys()], this.seen, (a) => '릴레이:' + a, famousLast);
   }
   relayPrepare(g) {
     if (!g.deck.length) g.deck = this.relayArtists();
@@ -644,6 +660,8 @@ class Room {
     const k = g.qNo % order.length; // 라운드마다 첫 순서 바꾸기
     order = [...order.slice(k), ...order.slice(0, k)];
     g.qNo++;
+    this.seen.add('릴레이:' + d.artist);
+    saveSeen(this);
     g.r = { d, order, names: new Map(order.map((id) => [id, this.players.get(id).name])), alive: new Set(order), used: new Set(), turn: null, strikes: 0, hinted: false };
     const names = order.map((id) => esc(g.r.names.get(id))).join(' → ');
     this.bot(`<div class="q-head">🎤 라운드 ${g.qNo}${g.limit ? ' / ' + g.limit : ''} · 노래 릴레이</div><div class="q-title">${esc(d.artist)}</div><div class="q-meta">이 가수 노래를 돌아가면서 하나씩! · 순서: ${names}</div>`);
